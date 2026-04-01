@@ -14,7 +14,6 @@ class UserRegisterView(APIView):
     """
     用户注册视图
     """
-
     def post(self, request, format=None):
         """
         处理用户注册请求
