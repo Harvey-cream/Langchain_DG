@@ -61,22 +61,24 @@ setupResponseInterceptor(apiClient);
 setupResponseInterceptor(releaseClient);
 
 // 通用请求方法
-export const sendRequest = async (url: string, method: string, data?: any): Promise<any> => {
+export const sendRequest = async (url: string, method: string, data?: any, timeout?: number): Promise<any> => {
   const config: AxiosRequestConfig = {
     url,
     method,
     data,
+    ...(timeout ? { timeout } : {}),
   };
   const response = await apiClient(config);
   return response.data;
 };
 
 // 不需要认证的请求方法
-export const sendReleaseRequest = async (url: string, method: string, data?: any): Promise<any> => {
+export const sendReleaseRequest = async (url: string, method: string, data?: any, timeout?: number): Promise<any> => {
   const config: AxiosRequestConfig = {
     url,
     method,
     data,
+    ...(timeout ? { timeout } : {}),
   };
   const response = await releaseClient(config);
   return response.data;

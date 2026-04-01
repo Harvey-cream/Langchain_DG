@@ -1,4 +1,4 @@
-import { sendRequest, sendReleaseRequest, sendUploadRequest } from './request';
+import { sendRequest, sendReleaseRequest} from './request';
 import { UserDto, LoginRequest } from '../types';
 
 // --- 公开接口 (不需要登录) ---
@@ -6,8 +6,11 @@ import { UserDto, LoginRequest } from '../types';
 // 注册
 export const register = (params: UserDto) => sendReleaseRequest("/api/user/register/", 'POST', params);
 
-// 登录（注：后端暂未实现登录接口，这里是预留接口）
+// 登录
 export const login = (params: LoginRequest) => sendReleaseRequest("/api/user/login/", 'POST', params);
+
+// AI 对话
+export const chatWithAgent = (message: string) => sendRequest("/api/agent/chat/", 'POST', { message }, 60000);
 
 // --- 受保护接口 (需要登录) ---
 

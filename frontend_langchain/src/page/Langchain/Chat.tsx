@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Modal } from 'antd';
+import { chatWithAgent } from '../../services/api';
 import './Chat.css';
 
 interface Message {
@@ -21,13 +23,30 @@ const Chat: React.FC = () => {
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const logoutModalShownRef = useRef(false);
   const navigate = useNavigate();
+
+  const handleForceLogout = (msg: string) => {
+    if (logoutModalShownRef.current) return;
+    logoutModalShownRef.current = true;
+
+    Modal.warning({
+      title: '登录状态失效',
+      content: msg,
+      okText: '退出登录',
+      centered: true,
+      onOk: () => {
+        localStorage.removeItem('token');
+        navigate('/login', { replace: true });
+      },
+    });
+  };
 
   useEffect(() => {
     // 检查是否已登录
     const token = localStorage.getItem('token');
     if (!token) {
-      navigate('/login');
+      handleForceLogout('登录已失效，请重新登录');
     }
   }, [navigate]);
 
@@ -40,11 +59,12 @@ const Chat: React.FC = () => {
   }, [messages]);
 
   const handleSendMessage = async () => {
-    if (!inputMessage.trim()) return;
+    const messageText = inputMessage.trim();
+    if (!messageText) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
-      content: inputMessage,
+      content: messageText,
       isUser: true,
       timestamp: new Date().toLocaleTimeString(),
     };
@@ -53,20 +73,50 @@ const Chat: React.FC = () => {
     setInputMessage('');
     setIsLoading(true);
 
-    // 模拟AI回复
-    setTimeout(() => {
+    try {
+      const response = await chatWithAgent(messageText);
+
+      if (response?.success === false && (response?.msg || '').includes('认证失败')) {
+        handleForceLogout('登录已失效，请重新登录');
+        return;
+      }
+
+      const aiReply = response?.data?.reply || response?.msg || '模型暂无回复';
+
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: `你好！你刚刚说："${inputMessage}"。这是一个模拟回复，实际应用中会调用真实的AI API。`,
+        content: aiReply,
         isUser: false,
         timestamp: new Date().toLocaleTimeString(),
       };
       setMessages(prev => [...prev, aiMessage]);
+    } catch (error) {
+      const err: any = error;
+      const errorMessage =
+        err?.response?.data?.msg ||
+        err?.response?.data?.message ||
+        err?.message ||
+        '调用失败，请稍后重试';
+
+      if (err?.response?.status === 401 || errorMessage.includes('认证失败')) {
+        handleForceLogout('登录已失效，请重新登录');
+        return;
+      }
+
+      const aiMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: errorMessage,
+        isUser: false,
+        timestamp: new Date().toLocaleTimeString(),
+      };
+      setMessages(prev => [...prev, aiMessage]);
+      console.error('调用AI失败:', error);
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
@@ -110,7 +160,7 @@ const Chat: React.FC = () => {
           type="text"
           value={inputMessage}
           onChange={(e) => setInputMessage(e.target.value)}
-          onKeyPress={handleKeyPress}
+          onKeyDown={handleKeyDown}
           placeholder="请输入消息..."
           className="chat-input"
         />
