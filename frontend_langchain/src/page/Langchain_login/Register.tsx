@@ -126,12 +126,6 @@ const Register: React.FC = () => {
       setErrors(prev => {
         const newErrors = { ...prev };
         delete newErrors[name];
-
-        // 邮箱修改时，同步清除顶部“已被注册”提示
-        if (name === 'email' && newErrors.submit?.includes('已被注册')) {
-          delete newErrors.submit;
-        }
-
         return newErrors;
       });
     }
@@ -196,19 +190,11 @@ const Register: React.FC = () => {
           navigate('/login');
         }, 3000);
       } else {
-        const errorMessage = response?.message || response?.msg || '注册失败，请稍后重试';
-
-        // 已注册邮箱优先展示在邮箱输入框下
-        if (errorMessage.includes('邮箱') && errorMessage.includes('已被注册')) {
-          setErrors({ email: errorMessage, submit: errorMessage });
-        } else {
-          setErrors({ submit: errorMessage });
-        }
+        setErrors({ submit: response.message });
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('注册失败，错误信息:', error);
-      const errorMessage = error?.response?.data?.message || error?.response?.data?.msg || '注册失败，请稍后重试';
-      setErrors({ submit: errorMessage });
+      setErrors({ submit: '注册失败，请稍后重试' });
     } finally {
       setLoading(false);
     }

@@ -1,94 +1,244 @@
+from __future__ import annotations
+
+import traceback
+from typing import List, Dict, Any
+
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 from rest_framework.views import APIView
 
-from common.response_web import HttpResult
-from common.LLM.config import get_qwen_chat_model
-from common.utils import format_datetime
 from User.models import UserConversation, UserSession
 from User.utils.user_utils import get_current_user
+from common.response_web import HttpResult
+from common.utils import format_datetime
+from common.LLM.config import get_qwen_chat_model
+from langchain_core.messages import HumanMessage
+from django.utils import timezone
+from .agent import chat as agent_chat
+
+# 错误详情存库时截断，避免超长 traceback 撑爆数据库行
+_MAX_ERROR_DETAIL_LEN = 8000
+_TITLE_MAX_LEN = 30
 
 
+def _fallback_title(message: str) -> str:
+    t = (message[:20] or "新对话").strip()
+    return t if t else "新对话"
+
+
+def _polish_conversation_title(user_message: str) -> str:
+    """用千问根据首条用户消息生成简短标题；失败则回退为截取前 20 字。"""
+    fb = _fallback_title(user_message)
+    if not user_message.strip():
+        return "新对话"
+    try:
+        llm = get_qwen_chat_model(temperature=0.3)
+        prompt = (
+            "你是标题助手。根据用户的第一条消息，生成一个简短、通顺的中文会话标题。"
+            f"要求：5～15 个字为宜，不超过 {_TITLE_MAX_LEN} 个字；不要引号、不要标点结尾、不要解释、只输出标题一行。\n\n"
+            f"用户消息：\n{user_message[:800]}"
+        )
+        resp = llm.invoke([HumanMessage(content=prompt)])
+        text = (getattr(resp, "content", None) or str(resp)).strip()
+        text = text.splitlines()[0].strip()
+        for q in ('"', "'", "「", "」", "《", "》"):
+            text = text.replace(q, "")
+        text = text.strip()
+        if len(text) > _TITLE_MAX_LEN:
+            text = text[:_TITLE_MAX_LEN]
+        return text if text else fb
+    except Exception:
+        return fb
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ChatView(APIView):
-    """阿里云千问对话接口（无系统提示词）"""
+    """
+    基于 ReAct + RAG 的对话接口
+    - GET /api/agent/chat/               -> 获取当前用户的会话列表
+    - GET /api/agent/chat/?conversation_id=xxx -> 获取某个会话的历史消息
+    - POST /api/agent/chat/              -> 发起一条新消息，调用智能体并落库
+    """
 
     def get(self, request):
         user = get_current_user(request)
         if not user:
-            return HttpResult.fail('认证失败，请重新登录')
+            return HttpResult.fail("认证失败，请重新登录")
 
-        conversation_id = request.GET.get('conversation_id')
+        conversation_id = request.query_params.get("conversation_id")
 
+        # 返回指定会话的历史消息
         if conversation_id:
-            conversation = UserConversation.objects.filter(id=conversation_id, user=user).first()
-            if not conversation:
-                return HttpResult.fail('会话不存在')
+            sessions = (
+                UserSession.objects.filter(user=user, conversation_id=conversation_id)
+                .order_by("created_at")
+                .all()
+            )
+            messages: List[Dict[str, Any]] = []
+            for s in sessions:
+                messages.append(
+                    {
+                        "id": s.id,
+                        "question": s.question,
+                        "ai_response": s.ai_response,
+                        "created_at": format_datetime(s.created_at),
+                    }
+                )
+            return HttpResult.success_with_data("获取会话消息成功", {"messages": messages})
 
-            sessions = UserSession.objects.filter(user=user, conversation=conversation).order_by('created_at')
-            messages = [
+        # 置顶优先，其次按置顶先后（pinned_at 越早越靠前）
+        conversations = (
+            UserConversation.objects.filter(user=user)
+            .order_by("-pinned", "pinned_at", "-updated_at")
+            .all()
+        )
+        data: List[Dict[str, Any]] = []
+        for c in conversations:
+            data.append(
                 {
-                    'id': session.id,
-                    'question': session.question,
-                    'ai_response': session.ai_response,
-                    'created_at': format_datetime(session.created_at),
+                    "id": c.id,
+                    "title": c.title,
+                    "pinned": bool(c.pinned),
+                    "created_at": format_datetime(c.created_at),
+                    "updated_at": format_datetime(c.updated_at),
                 }
-                for session in sessions
-            ]
-
-            return HttpResult.success_with_data('获取成功', {
-                'conversation': {
-                    'id': conversation.id,
-                    'title': conversation.title,
-                    'created_at': format_datetime(conversation.created_at),
-                    'updated_at': format_datetime(conversation.updated_at),
-                },
-                'messages': messages,
-            })
-
-        conversations = UserConversation.objects.filter(user=user).order_by('-updated_at')
-        conversation_list = [
-            {
-                'id': conversation.id,
-                'title': conversation.title,
-                'created_at': format_datetime(conversation.created_at),
-                'updated_at': format_datetime(conversation.updated_at),
-            }
-            for conversation in conversations
-        ]
-
-        return HttpResult.success_with_data('获取成功', {'conversations': conversation_list})
+            )
+        return HttpResult.success_with_data("获取会话列表成功", {"conversations": data})
 
     def post(self, request):
+        """
+        前端调用：POST /api/agent/chat/
+        body: { message: string, conversation_id?: number }
+        """
         user = get_current_user(request)
         if not user:
-            return HttpResult.fail('认证失败，请重新登录')
+            return HttpResult.fail("认证失败，请重新登录")
 
         try:
             data = request.data
-            user_input = (data.get('message') or '').strip()
-            conversation_id = data.get('conversation_id')
+            message = (data.get("message") or "").strip()
+            if not message:
+                return HttpResult.fail("消息不能为空")
 
-            if not user_input:
-                return HttpResult.fail('消息不能为空')
+            conversation_id = data.get("conversation_id")
 
+            # 如果传了 conversation_id，就在该会话下继续对话；否则新建一个会话
             conversation = None
             if conversation_id:
-                conversation = UserConversation.objects.filter(id=conversation_id, user=user).first()
+                conversation = (
+                    UserConversation.objects.filter(
+                        id=conversation_id,
+                        user=user,
+                    ).first()
+                )
 
             if not conversation:
-                conversation = UserConversation.objects.create(user=user, title='新对话')
+                # 会话标题：千问润色生成；失败则取用户问题前 20 字
+                title = _polish_conversation_title(message)
+                conversation = UserConversation.objects.create(
+                    user=user,
+                    title=title,
+                )
 
-            llm = get_qwen_chat_model()
-            ai_text = llm.invoke(user_input).content
-
-            UserSession.objects.create(
+            # 先落库用户输入
+            session_obj = UserSession.objects.create(
                 user=user,
                 conversation=conversation,
-                question=user_input,
-                ai_response=ai_text,
+                question=message,
+                ai_response="",
             )
+            # 调用智能体（ReAct + RAG）
+            try:
+                reply = agent_chat(message)
+            except Exception as e:  # noqa: BLE001
+                tb = traceback.format_exc()
+                detail = f"{str(e)}\n\n--- traceback ---\n{tb}"
+                if len(detail) > _MAX_ERROR_DETAIL_LEN:
+                    detail = detail[: _MAX_ERROR_DETAIL_LEN] + "\n…(已截断)"
+                session_obj.ai_response = f"[智能体调用失败]\n{detail}"
+                session_obj.save()
+                conversation.save()
+                return HttpResult.fail(f"调用智能体失败：{str(e)}")
 
-            return HttpResult.success_with_data('调用成功', {
-                'reply': ai_text,
-                'conversation_id': conversation.id,
-            })
-        except Exception as e:
-            return HttpResult.fail(f'调用千问失败：{str(e)}')
+            # 更新 AI 回复
+            session_obj.ai_response = reply
+            session_obj.save()
+
+            # 更新会话更新时间
+            conversation.save()
+
+            # 响应结构与前端期望保持一致
+            resp_data = {
+                "reply": reply,
+                "conversation_id": conversation.id,
+            }
+            return HttpResult.success_with_data("对话成功", resp_data)
+
+        except Exception as e:  # noqa: BLE001
+            return HttpResult.fail(f"对话失败：{str(e)}")
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class ConversationManageView(APIView):
+    """
+    会话管理（重命名、置顶、删除）
+    - PATCH /api/agent/conversation/  body: { conversation_id, title? } 或 { conversation_id, pinned: bool }
+    - DELETE /api/agent/conversation/ body: { conversation_id }
+    """
+
+    def patch(self, request):
+        user = get_current_user(request)
+        if not user:
+            return HttpResult.fail("认证失败，请重新登录")
+        data = request.data or {}
+        cid = data.get("conversation_id")
+        if cid is None:
+            return HttpResult.fail("缺少 conversation_id")
+        conv = UserConversation.objects.filter(id=cid, user=user).first()
+        if not conv:
+            return HttpResult.fail("会话不存在")
+
+        if "title" in data:
+            title = (data.get("title") or "").strip()
+            if not title:
+                return HttpResult.fail("标题不能为空")
+            conv.title = title[:255]
+
+        if "pinned" in data:
+            is_pinned = bool(data.get("pinned"))
+            conv.pinned = is_pinned
+            if is_pinned:
+                # 记录置顶时间，用于多条置顶的先后排序
+                if conv.pinned_at is None:
+                    conv.pinned_at = timezone.now()
+            else:
+                conv.pinned_at = None
+
+        if "title" not in data and "pinned" not in data:
+            return HttpResult.fail("请提供 title 或 pinned")
+
+        conv.save()
+        return HttpResult.success_with_data(
+            "更新成功",
+            {
+                "id": conv.id,
+                "title": conv.title,
+                "pinned": bool(conv.pinned),
+                "updated_at": format_datetime(conv.updated_at),
+            },
+        )
+
+    def delete(self, request):
+        user = get_current_user(request)
+        if not user:
+            return HttpResult.fail("认证失败，请重新登录")
+        data = request.data if isinstance(request.data, dict) else {}
+        cid = data.get("conversation_id") or request.query_params.get("conversation_id")
+        if cid is None:
+            return HttpResult.fail("缺少 conversation_id")
+        conv = UserConversation.objects.filter(id=cid, user=user).first()
+        if not conv:
+            return HttpResult.fail("会话不存在")
+        conv.delete()
+        return HttpResult.success("删除成功")
+

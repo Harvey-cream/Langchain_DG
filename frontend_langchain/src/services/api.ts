@@ -20,6 +20,17 @@ export const getConversations = () => sendRequest("/api/agent/chat/", 'GET');
 export const getConversationMessages = (conversationId: number) =>
   sendRequest(`/api/agent/chat/?conversation_id=${conversationId}`, 'GET');
 
+/** 更新会话：重命名 title 和/或 置顶 pinned */
+export const patchConversation = (params: {
+  conversation_id: number;
+  title?: string;
+  pinned?: boolean;
+}) => sendRequest('/api/agent/conversation/', 'PATCH', params);
+
+/** 删除会话（级联删除该会话下消息） */
+export const deleteConversation = (conversationId: number) =>
+  sendRequest('/api/agent/conversation/', 'DELETE', { conversation_id: conversationId });
+
 // 示例：获取用户信息
 export const getUserInfo = () => sendRequest("/api/user/info/", 'GET');
 

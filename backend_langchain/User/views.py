@@ -50,10 +50,12 @@ class UserRegisterView(APIView):
                 email=email,
                 password=hashed_password
             )
+            user.ensure_display_tag()
             user_data = {
                 'user_id': user.user_id,
                 'username': user.username,
                 'email': user.email,
+                'display_tag': user.display_tag,
                 'created_at': format_datetime(user.created_at)
             }
             return HttpResult.success_with_data("注册成功", user_data)
@@ -93,6 +95,7 @@ class UserLoginView(APIView):
             hashed_password = hashlib.sha256(password.encode()).hexdigest()
             if user.password != hashed_password:
                 return HttpResult.fail("邮箱或密码错误")
+            user.ensure_display_tag()
             # token
             token = create_token(user.user_id)
             response_data = {
@@ -100,7 +103,8 @@ class UserLoginView(APIView):
                 'user': {
                     'user_id': user.user_id,
                     'username': user.username,
-                    'email': user.email
+                    'email': user.email,
+                    'display_tag': user.display_tag,
                 }
             }
             return HttpResult.success_with_data("登录成功", response_data)
@@ -118,10 +122,12 @@ class UserInfoView(APIView):
 
         if not user:
             return HttpResult.fail("认证失败，请重新登录")
+        user.ensure_display_tag()
         user_data = {
             'user_id': user.user_id,
             'username': user.username,
             'email': user.email,
+            'display_tag': user.display_tag,
             'created_at': format_datetime(user.created_at)
         }
         return HttpResult.success_with_data("获取成功", user_data)
@@ -140,10 +146,12 @@ class UserInfoView(APIView):
                 user.username = username
                 user.save()
 
+            user.ensure_display_tag()
             user_data = {
                 'user_id': user.user_id,
                 'username': user.username,
                 'email': user.email,
+                'display_tag': user.display_tag,
                 'updated_at': format_datetime(user.updated_at)
             }
             return HttpResult.success_with_data("更新成功", user_data)

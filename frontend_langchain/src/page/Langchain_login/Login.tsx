@@ -126,20 +126,20 @@ const Login: React.FC = () => {
     setLoading(true);
 
     try {
-      console.log('开始登录，原始表单数据:', formData);
+      // console.log('开始登录，原始表单数据:', formData);
       // 加密密码
       const encryptedPassword = SM2Utils.encrypt(formData.password);
-      console.log('加密后的密码:', encryptedPassword);
+      // console.log('加密后的密码:', encryptedPassword);
       
       const encryptedFormData = {
         ...formData,
         password: encryptedPassword
       };
-      console.log('加密后的表单数据:', encryptedFormData);
+      // console.log('加密后的表单数据:', encryptedFormData);
       
-      console.log('准备发送登录请求...');
+      // console.log('准备发送登录请求...');
       const response = await login(encryptedFormData);
-      console.log('登录请求响应:', response);
+      // console.log('登录请求响应:', response);
 
       if (response.success) {
           // 登录成功，存储token（如果有）
@@ -149,8 +149,7 @@ const Login: React.FC = () => {
           // 跳转到聊天页面
           navigate('/chat');
         } else {
-          const errorMessage = response?.msg || response?.message || '登录失败，请稍后重试';
-          setErrors({ submit: errorMessage });
+          setErrors({ submit: response.message });
         }
     } catch (error) {
       console.error('登录失败，错误信息:', error);
