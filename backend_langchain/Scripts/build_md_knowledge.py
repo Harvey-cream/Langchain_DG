@@ -1,325 +1,287 @@
+"""
+将 Markdown 入库到 Chroma（本地 HuggingFace embedding）。
+
+默认：四套文档目录 → 四个独立 persist 目录（同 collection 名，靠路径隔离）。
+自定义：--docs-dirs + --chroma-dir 合并进一个库。
+
+下载 embedding 模型：默认通过 common.hf_mirror 设置 HF_ENDPOINT=https://hf-mirror.com（国内镜像）。
+已在环境或 .env 中配置 HF_ENDPOINT 时不会被覆盖；需要直连官方可加参数 --no-hf-mirror。
+"""
+from __future__ import annotations
+
 import argparse
 import os
 import re
+import sys
 from pathlib import Path
 
+# 直接运行本脚本时保证能 import backend_langchain 下的 common
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 from dotenv import load_dotenv
+from common.hf_mirror import apply_hf_mirror_default
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 
-
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 _HTML_IMG_RE = re.compile(r"<img\s+[^>]*>", flags=re.IGNORECASE)
+_CHROMA_PAGE = 5000
 
-_CHROMA_GET_PAGE = 5000
+# (key, docs 相对 backend_langchain, chroma 子目录相对 Langchain_knowledge/chroma_db)
+DEFAULT_BASES: tuple[tuple[str, str, str], ...] = (
+    ("ai_programming", "Langchain_knowledge/docs/AI编程工具与实战", "AI_programming"),
+    ("openclaw", "Langchain_knowledge/docs/OpenClaw 保姆级教程", "Openclaw"),
+    ("vibecoding", "Langchain_knowledge/docs/Vibe Coding 零基础教程", "Vibecoding"),
+    ("learn_programing", "Langchain_knowledge/docs/编程学习路线与面试", "Learn_programing"),
+)
 
 
-def _clean_markdown(text: str, *, strip_images: bool) -> str:
-    """
-    为了减少 embedding 噪声，可选剥离图片引用行。
-    （不改动代码块/正文结构）
-    """
-    if not strip_images:
+def _strip_images(text: str, *, do_strip: bool) -> str:
+    if not do_strip:
         return text
     text = _MD_IMAGE_RE.sub("", text)
-    text = _HTML_IMG_RE.sub("", text)
-    return text
+    return _HTML_IMG_RE.sub("", text)
 
 
-def _infer_metadata(rel_path_posix: str) -> dict:
-    parts = rel_path_posix.split("/")
-    lang = "zh"
-    top_section = parts[0] if parts else ""
-
+def _meta_for_file(rel_path: str, *, knowledge_base: str) -> dict:
+    parts = rel_path.split("/")
+    lang, top = "zh", parts[0] if parts else ""
     if len(parts) >= 3 and parts[0] == "translations":
-        lang = parts[1]
-        top_section = parts[2]
-
-    return {
-        "source_path": rel_path_posix,
-        "lang": lang,
-        "top_section": top_section,
-    }
+        lang, top = parts[1], parts[2]
+    return {"lang": lang, "top_section": top, "knowledge_base": knowledge_base}
 
 
-def _source_path_for_md(file_path: Path, docs_dirs: list[Path]) -> str | None:
-    parent_dir = next((d for d in docs_dirs if file_path.is_relative_to(d)), None)
-    if not parent_dir:
+def _source_key(file_path: Path, docs_roots: list[Path]) -> str | None:
+    root = next((d for d in docs_roots if file_path.is_relative_to(d)), None)
+    if not root:
         return None
-    rel_path = file_path.relative_to(parent_dir).as_posix()
-    return f"{parent_dir.name}/{rel_path}"
+    return f"{root.name}/{file_path.relative_to(root).as_posix()}"
 
 
-def _assign_per_source_chunk_ids(chunks: list[Document]) -> list[str]:
+def _chunk_ids(chunks: list[Document]) -> list[str]:
     ids: list[str] = []
-    next_i: dict[str, int] = {}
-    for chunk in chunks:
-        source_path = chunk.metadata.get("source_path", "unknown")
-        i = next_i.get(source_path, 0)
-        chunk.metadata["chunk_index"] = i
-        ids.append(f"{source_path}::chunk-{i}")
-        next_i[source_path] = i + 1
+    n: dict[str, int] = {}
+    for ch in chunks:
+        sp = ch.metadata.get("source_path", "unknown")
+        i = n.get(sp, 0)
+        ch.metadata["chunk_index"] = i
+        ids.append(f"{sp}::chunk-{i}")
+        n[sp] = i + 1
     return ids
 
 
-def _existing_source_paths(vector_db: Chroma) -> set[str]:
-    paths: set[str] = set()
+def _existing_sources(chroma: Chroma) -> set[str]:
+    out: set[str] = set()
     offset = 0
     while True:
-        batch = vector_db.get(
-            include=["metadatas"],
-            limit=_CHROMA_GET_PAGE,
-            offset=offset,
-        )
+        batch = chroma.get(include=["metadatas"], limit=_CHROMA_PAGE, offset=offset)
         metas = batch.get("metadatas") or []
         if not metas:
             break
         for m in metas:
             if m and (sp := m.get("source_path")):
-                paths.add(str(sp))
-        if len(metas) < _CHROMA_GET_PAGE:
+                out.add(str(sp))
+        if len(metas) < _CHROMA_PAGE:
             break
-        offset += _CHROMA_GET_PAGE
-    return paths
+        offset += _CHROMA_PAGE
+    return out
 
 
-def _resolve_model_ref(model_arg: str) -> str:
-    """
-    --embedding-model 可为 HuggingFace repo id（如 BAAI/bge-small-zh-v1.5），
-    或本机已下载的模型目录（路径须存在）。
-    """
-    raw = model_arg.strip()
+def _resolve_embedding_model(arg: str) -> str:
+    raw = arg.strip()
     if not raw:
         raise ValueError("--embedding-model 不能为空")
     p = Path(os.path.expandvars(os.path.expanduser(raw)))
-    if p.exists() and p.is_dir():
+    if p.is_dir():
         return str(p.resolve())
-    if p.exists() and p.is_file():
-        raise ValueError(f"--embedding-model 需要模型目录，不是单个文件: {raw!r}")
-    # 明显是本地路径意图（含反斜杠、盘符、相对路径前缀），但目录不存在
-    path_intent = (
-        "\\" in raw
-        or (len(raw) >= 2 and raw[1] == ":")
-        or raw.startswith((".", "/", "\\"))
-    )
-    if path_intent:
+    if p.is_file():
+        raise ValueError(f"--embedding-model 需要目录，不是文件: {raw!r}")
+    looks_local = "\\" in raw or (len(raw) >= 2 and raw[1] == ":") or raw.startswith((".", "/", "\\"))
+    if looks_local:
         raise FileNotFoundError(
-            f"本地模型路径不存在或不是目录: {raw!r}\n"
-            "请填写本机真实路径，或使用 HuggingFace id（如 BAAI/bge-small-zh-v1.5）。"
+            f"本地模型路径不存在: {raw!r}；或改用 HuggingFace id（如 BAAI/bge-small-zh-v1.5）。"
         )
     return raw
 
 
-def _make_embeddings(
-    *,
-    model_ref: str,
-    hf_cache_dir: str | None,
-    local_only: bool,
-) -> HuggingFaceEmbeddings:
-    model_kwargs: dict = {"device": "cpu"}
+def _embeddings(model_ref: str, *, hf_cache: str | None, local_only: bool) -> HuggingFaceEmbeddings:
+    mkw: dict = {"device": "cpu"}
     if local_only:
-        model_kwargs["local_files_only"] = True
+        mkw["local_files_only"] = True
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
         os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     return HuggingFaceEmbeddings(
         model_name=model_ref,
-        cache_folder=hf_cache_dir,
-        model_kwargs=model_kwargs,
+        cache_folder=hf_cache,
+        model_kwargs=mkw,
         encode_kwargs={"normalize_embeddings": True},
     )
 
 
 def build_md_knowledge(
-    docs_dirs: list[Path],
+    docs_roots: list[Path],
     chroma_dir: Path,
     *,
-    collection_name: str,
-    embedding_model_name: str,
+    collection: str,
+    model_arg: str,
     chunk_size: int = 1000,
     chunk_overlap: int = 150,
     strip_images: bool = True,
     max_files: int | None = None,
     append: bool = False,
-    hf_cache_dir: str | None = None,
+    hf_cache: str | None = None,
     local_only: bool = False,
-):
+    embeddings: HuggingFaceEmbeddings | None = None,
+) -> None:
+    """读取 docs_roots 下全部 .md → 切分 → 写入 chroma_dir。"""
     all_md: list[Path] = []
-    for docs_dir in docs_dirs:
-        all_md.extend(sorted(docs_dir.rglob("*.md")))
-
+    for root in docs_roots:
+        all_md.extend(sorted(root.rglob("*.md")))
     if not all_md:
-        raise RuntimeError("在指定 docs 目录下未找到任何 .md 文件")
+        raise RuntimeError("未找到任何 .md 文件")
 
-    md_files = all_md
     if append:
         chroma_dir.mkdir(parents=True, exist_ok=True)
-        vector_probe = Chroma(
+        probe = Chroma(
             persist_directory=str(chroma_dir),
             embedding_function=None,
-            collection_name=collection_name,
+            collection_name=collection,
         )
-        existing = _existing_source_paths(vector_probe)
-        md_files = [
-            p
-            for p in all_md
-            if (sp := _source_path_for_md(p, docs_dirs)) is not None and sp not in existing
-        ]
-        skipped = len(all_md) - len(md_files)
-        print(
-            f"[0/4] 增量模式：库中已有 {len(existing)} 个文档路径，跳过已入库 {skipped} 篇，待处理 {len(md_files)} 篇"
-        )
-        if max_files is not None:
-            md_files = md_files[:max_files]
-    else:
-        if max_files is not None:
-            md_files = md_files[:max_files]
+        have = _existing_sources(probe)
+        all_md = [p for p in all_md if (k := _source_key(p, docs_roots)) and k not in have]
+        print(f"[增量] 待处理 {len(all_md)} 篇（已跳过库内已有）")
 
-    if not md_files:
-        print("没有需要入库的 .md 文件（可能已全部在库中或 max-files 为 0）")
+    if max_files is not None:
+        all_md = all_md[:max_files]
+
+    if not all_md:
+        print("无需处理。")
         return
 
-    print(f"[1/4] 发现 .md 文件: {len(md_files)} 篇")
-
+    print(f"[读取] {len(all_md)} 篇 md")
     raw_docs: list[Document] = []
-    for i, file_path in enumerate(md_files, start=1):
-        parent_dir = next((d for d in docs_dirs if file_path.is_relative_to(d)), None)
-        if not parent_dir:
+    for i, path in enumerate(all_md, 1):
+        root = next((d for d in docs_roots if path.is_relative_to(d)), None)
+        if root is None:
             continue
-        rel_path = file_path.relative_to(parent_dir).as_posix()
-        source_path = f"{parent_dir.name}/{rel_path}"
-        metadata = _infer_metadata(rel_path)
-        metadata["source_path"] = source_path
-
-        text = file_path.read_text(encoding="utf-8")
-        text = _clean_markdown(text, strip_images=strip_images)
-
-        page_content = f"# Source: {source_path}\n\n{text}".strip()
-        raw_docs.append(Document(page_content=page_content, metadata=metadata))
-
+        rel = path.relative_to(root).as_posix()
+        sp = f"{root.name}/{rel}"
+        md = _meta_for_file(rel, knowledge_base=root.name)
+        md["source_path"] = sp
+        text = _strip_images(path.read_text(encoding="utf-8"), do_strip=strip_images)
+        raw_docs.append(
+            Document(page_content=f"# Source: {sp}\n\n{text}".strip(), metadata=md)
+        )
         if i % 50 == 0:
-            print(f"  已读取 {i}/{len(md_files)}")
+            print(f"  …{i}/{len(all_md)}")
 
-    print("[2/4] 文本切分")
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     chunks = splitter.split_documents(raw_docs)
-    print(f"切分完成，共 {len(chunks)} 个文本块")
+    print(f"[切分] {len(chunks)} 块")
 
-    print("[3/4] 使用本地向量模型并写入 Chroma")
-    model_ref = _resolve_model_ref(embedding_model_name)
-    embeddings = _make_embeddings(
-        model_ref=model_ref,
-        hf_cache_dir=hf_cache_dir,
-        local_only=local_only,
-    )
-    ids = _assign_per_source_chunk_ids(chunks)
-
+    model_ref = _resolve_embedding_model(model_arg)
+    emb = embeddings or _embeddings(model_ref, hf_cache=hf_cache, local_only=local_only)
+    ids = _chunk_ids(chunks)
     chroma_dir.mkdir(parents=True, exist_ok=True)
 
     if append:
-        vector_db = Chroma(
+        db = Chroma(
             persist_directory=str(chroma_dir),
-            embedding_function=embeddings,
-            collection_name=collection_name,
+            embedding_function=emb,
+            collection_name=collection,
         )
-        vector_db.add_documents(chunks, ids=ids)
+        db.add_documents(chunks, ids=ids)
     else:
-        vector_db = Chroma.from_documents(
+        db = Chroma.from_documents(
             documents=chunks,
-            embedding=embeddings,
+            embedding=emb,
             ids=ids,
-            collection_name=collection_name,
+            collection_name=collection,
             persist_directory=str(chroma_dir),
         )
-    vector_db.persist()
-
-    print("知识库构建完成")
-    print(f"原始文档目录: {[str(d) for d in docs_dirs]}")
-    print(f"向量库目录: {chroma_dir}")
-    print(f"collection_name: {collection_name}")
-    print(f"embedding_model: {model_ref}")
+    db.persist()
+    print(f"[完成] {chroma_dir} | collection={collection} | model={model_ref}")
 
 
-def main():
+def main() -> None:
     load_dotenv()
-
-    parser = argparse.ArgumentParser(description="将本地 Markdown 知识库入库到 Chroma（本地 embedding）")
-    parser.add_argument(
-        "--docs-dirs",
-        nargs="+",
-        default=[
-            "Langchain_knowledge/docs/OpenClaw 保姆级教程",
-            "Langchain_knowledge/docs/Vibe Coding 零基础教程",
-        ],
-        help="Markdown 知识库目录列表（相对 backend_langchain）",
-    )
-    parser.add_argument(
-        "--chroma-dir",
-        default="Langchain_knowledge/chroma_db",
-        help="Chroma 持久化目录（相对 backend_langchain）",
-    )
-    parser.add_argument(
-        "--collection-name",
-        default="vibe_openclaw_md",
-        help="Chroma collection 名称",
-    )
-    parser.add_argument(
-        "--embedding-model",
-        default="BAAI/bge-small-zh-v1.5",
-        help="HuggingFace 模型 id，或本机已下载的模型目录（绝对/相对路径均可）",
-    )
-    parser.add_argument(
-        "--hf-cache-dir",
-        default=None,
-        help="SentenceTransformers/HuggingFace 缓存目录，减轻重复下载",
-    )
-    parser.add_argument(
-        "--local-only",
+    p = argparse.ArgumentParser(description="Markdown → Chroma（默认四套分库）")
+    p.add_argument("--docs-dirs", nargs="+", default=None, help="自定义多文档根目录（须配合 --chroma-dir）")
+    p.add_argument("--chroma-dir", default=None, help="自定义单一 Chroma 目录（相对 backend_langchain）")
+    p.add_argument("--only", nargs="+", choices=[t[0] for t in DEFAULT_BASES], help="只构建部分默认库")
+    p.add_argument("--collection-name", default="md_knowledge")
+    p.add_argument("--embedding-model", default="BAAI/bge-small-zh-v1.5")
+    p.add_argument("--hf-cache-dir", default=None)
+    p.add_argument("--local-only", action="store_true")
+    p.add_argument(
+        "--no-hf-mirror",
         action="store_true",
-        help="仅使用本地缓存/目录，不访问 HuggingFace（需模型已在 cache 或 --embedding-model 为本地目录）",
+        help="不设置默认 HF 镜像（仍可使用环境变量 HF_ENDPOINT 自行指定）",
     )
-    parser.add_argument("--chunk-size", type=int, default=1000)
-    parser.add_argument("--chunk-overlap", type=int, default=150)
-    parser.add_argument(
-        "--no-strip-images",
-        action="store_true",
-        help="不剥离图片引用（会增加噪声与 token）",
-    )
-    parser.add_argument(
-        "--max-files",
-        type=int,
-        default=None,
-        help="非 append：只处理排序后前 N 个 md；append：在「未入库」列表上再截断 N 个",
-    )
-    parser.add_argument(
-        "--append",
-        action="store_true",
-        help="增量入库：跳过 Chroma 中已有 source_path 的文档",
-    )
+    p.add_argument("--chunk-size", type=int, default=1000)
+    p.add_argument("--chunk-overlap", type=int, default=150)
+    p.add_argument("--no-strip-images", action="store_true")
+    p.add_argument("--max-files", type=int, default=None)
+    p.add_argument("--append", action="store_true")
+    args = p.parse_args()
+    if args.no_hf_mirror:
+        os.environ.pop("HF_ENDPOINT", None)
+    else:
+        apply_hf_mirror_default()
 
-    args = parser.parse_args()
-
-    base_dir = Path(__file__).resolve().parent.parent
-    docs_dirs = [(base_dir / d).resolve() for d in args.docs_dirs]
-    chroma_dir = (base_dir / args.chroma_dir).resolve()
-
-    build_md_knowledge(
-        docs_dirs=docs_dirs,
-        chroma_dir=chroma_dir,
-        collection_name=args.collection_name,
-        embedding_model_name=args.embedding_model,
+    base = Path(__file__).resolve().parent.parent
+    kw = dict(
+        collection=args.collection_name,
+        model_arg=args.embedding_model,
         chunk_size=args.chunk_size,
         chunk_overlap=args.chunk_overlap,
         strip_images=not args.no_strip_images,
         max_files=args.max_files,
         append=args.append,
-        hf_cache_dir=args.hf_cache_dir,
+        hf_cache=args.hf_cache_dir,
         local_only=args.local_only,
     )
+
+    if args.docs_dirs is not None:
+        if not args.chroma_dir:
+            p.error("--docs-dirs 必须配合 --chroma-dir")
+        build_md_knowledge(
+            [(base / d).resolve() for d in args.docs_dirs],
+            (base / args.chroma_dir).resolve(),
+            **kw,
+        )
+        return
+
+    # 默认：四套分库，embedding 只加载一次
+    keys = set(args.only) if args.only else None
+    specs = [t for t in DEFAULT_BASES if keys is None or t[0] in keys]
+    if keys:
+        bad = keys - {t[0] for t in DEFAULT_BASES}
+        if bad:
+            raise SystemExit(f"未知 --only: {bad}")
+    if not specs:
+        raise SystemExit("没有可构建的库（检查 --only）")
+
+    model_ref = _resolve_embedding_model(args.embedding_model)
+    shared = _embeddings(model_ref, hf_cache=args.hf_cache_dir, local_only=args.local_only)
+    print(f"四套分库，embedding 一次加载: {model_ref}")
+
+    chroma_parent = base / "Langchain_knowledge" / "chroma_db"
+    for key, docs_rel, sub in specs:
+        docs_path = (base / docs_rel).resolve()
+        if not docs_path.is_dir():
+            raise FileNotFoundError(f"文档目录不存在: {docs_path}")
+        print(f"\n--- {key} ---")
+        build_md_knowledge(
+            [docs_path],
+            chroma_parent / sub,
+            embeddings=shared,
+            **kw,
+        )
 
 
 if __name__ == "__main__":

@@ -9,9 +9,11 @@ export const register = (params: UserDto) => sendReleaseRequest("/api/user/regis
 export const login = (params: LoginRequest) => sendReleaseRequest("/api/user/login/", 'POST', params);
 
 // --- 受保护接口 (需要登录) ---
-// AI 对话
-export const chatWithAgent = (message: string, conversationId?: number) =>
-  sendRequest("/api/agent/chat/", 'POST', { message, conversation_id: conversationId }, 60000);
+//
+// 发送一条「流式」对话消息不在本文件里封装：见 services/chatStream.ts。
+// 原因：流式必须用 fetch + response.body.getReader() 读 SSE，而 sendRequest 基于 axios，
+// 不适合消费 text/event-stream；路径为 POST /api/agent/chat/stream/。
+//
 
 // 获取会话列表
 export const getConversations = () => sendRequest("/api/agent/chat/", 'GET');
@@ -31,8 +33,8 @@ export const patchConversation = (params: {
 export const deleteConversation = (conversationId: number) =>
   sendRequest('/api/agent/conversation/', 'DELETE', { conversation_id: conversationId });
 
-// 示例：获取用户信息
+// 获取用户信息
 export const getUserInfo = () => sendRequest("/api/user/info/", 'GET');
 
-// 示例：更新用户信息
+// 更新用户信息
 export const updateUserInfo = (params: any) => sendRequest("/api/user/info/update/", 'PUT', params);

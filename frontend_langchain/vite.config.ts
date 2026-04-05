@@ -9,8 +9,16 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:8010',
-        changeOrigin: true
-      }
-    }
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            const ct = proxyRes.headers['content-type'] as string | undefined;
+            if (ct?.includes('text/event-stream')) {
+              proxyRes.headers['x-accel-buffering'] = 'no';
+            }
+          });
+        },
+      },
+    },
   }
 })

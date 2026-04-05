@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import json
+import logging
+import queue
+import threading
 import traceback
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Iterator, Optional
+from uuid import UUID
 
+from .utils.SSE import _sse_bytes, _user_visible_reply, _TOKEN_STREAM_END, _FinalAnswerOnlyTokenHandler
+
+from django.db import close_old_connections
+from django.http import StreamingHttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from rest_framework.views import APIView
@@ -14,7 +23,9 @@ from common.utils import format_datetime
 from common.LLM.config import get_qwen_chat_model
 from langchain_core.messages import HumanMessage
 from django.utils import timezone
-from .agent import chat as agent_chat
+from .agent import chat as agent_chat, invoke_agent_with_stream_callbacks
+
+logger = logging.getLogger(__name__)
 
 # 错误详情存库时截断，避免超长 traceback 撑爆数据库行
 _MAX_ERROR_DETAIL_LEN = 8000
@@ -176,6 +187,140 @@ class ChatView(APIView):
 
         except Exception as e:  # noqa: BLE001
             return HttpResult.fail(f"对话失败：{str(e)}")
+
+
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class ChatStreamView(APIView):
+    """
+    SSE 流式对话（text/event-stream）。
+    - 千问 streaming=True；仅「Final Answer:」之后的 token 推给前端（Thought/Action/Observation 不推送）。
+    - 推理期间若尚无 Final Answer，周期性 type=ping，避免长时间无字节被网关/浏览器断开。
+    POST /api/agent/chat/stream/  body: { message, conversation_id? }
+    """
+
+    _FALLBACK_DELTA_CHARS = 16
+    _PING_INTERVAL_SEC = 2.0
+
+    def post(self, request):
+        user = get_current_user(request)
+        if not user:
+            return JsonResponse({"success": False, "msg": "认证失败，请重新登录"}, status=401)
+
+        data = request.data if isinstance(request.data, dict) else {}
+        msg_text = (data.get("message") or "").strip()
+        if not msg_text:
+            return JsonResponse({"success": False, "msg": "消息不能为空"}, status=400)
+
+        conversation_id = data.get("conversation_id")
+        conversation = None
+        if conversation_id is not None:
+            conversation = UserConversation.objects.filter(id=conversation_id, user=user).first()
+
+        if not conversation:
+            title = _polish_conversation_title(msg_text)
+            conversation = UserConversation.objects.create(user=user, title=title)
+
+        session_obj = UserSession.objects.create(
+            user=user,
+            conversation=conversation,
+            question=msg_text,
+            ai_response="",
+        )
+
+        def gen() -> Iterator[bytes]:
+            result_q: queue.Queue = queue.Queue(maxsize=1)
+            token_q: queue.Queue = queue.Queue()
+
+            def run_agent() -> None:
+                close_old_connections()
+                # 与 AppConfig 启动预热相同；若后台线程尚未跑完，此处再拉一次（幂等）
+                try:
+                    from .tools import warmup_rag_singletons
+
+                    warmup_rag_singletons()
+                except Exception:
+                    logger.exception("chat_stream: warmup_rag_singletons failed")
+                handler = _FinalAnswerOnlyTokenHandler(token_q)
+                try:
+                    reply = invoke_agent_with_stream_callbacks(msg_text, [handler])
+                    result_q.put(("ok", reply))
+                except Exception as e:  # noqa: BLE001
+                    result_q.put(("err", (e, traceback.format_exc())))
+                finally:
+                    token_q.put(_TOKEN_STREAM_END)
+                    close_old_connections()
+
+            yield _sse_bytes(
+                {
+                    "type": "meta",
+                    "conversation_id": conversation.id,
+                    "session_id": session_obj.id,
+                }
+            )
+
+            worker = threading.Thread(target=run_agent, daemon=True)
+            worker.start()
+
+            tokens_received = 0
+            while True:
+                try:
+                    item = token_q.get(timeout=self._PING_INTERVAL_SEC)
+                except queue.Empty:
+                    if worker.is_alive():
+                        yield _sse_bytes({"type": "ping"})
+                    else:
+                        break
+                    continue
+                if item is _TOKEN_STREAM_END:
+                    break
+                tokens_received += 1
+                yield _sse_bytes({"type": "delta", "text": item})
+
+            worker.join(timeout=120.0)
+
+            try:
+                kind, payload = result_q.get_nowait()
+            except queue.Empty:
+                session_obj.ai_response = "[智能体调用失败]\n未收到执行结果"
+                session_obj.save()
+                conversation.save()
+                yield _sse_bytes({"type": "error", "message": "智能体未返回结果"})
+                yield _sse_bytes({"type": "done"})
+                return
+
+            if kind == "err":
+                err, tb = payload
+                detail = f"{str(err)}\n\n--- traceback ---\n{tb}"
+                if len(detail) > _MAX_ERROR_DETAIL_LEN:
+                    detail = detail[: _MAX_ERROR_DETAIL_LEN] + "\n…(已截断)"
+                session_obj.ai_response = f"[智能体调用失败]\n{detail}"
+                session_obj.save()
+                conversation.save()
+                yield _sse_bytes({"type": "error", "message": str(err)})
+                yield _sse_bytes({"type": "done"})
+                return
+
+            reply = str(payload)
+            stored = _user_visible_reply(reply)
+            session_obj.ai_response = stored
+            session_obj.save()
+            conversation.save()
+
+            # 极少数情况下未触发 token 回调，按块补发（与落库一致，仅最终回答）
+            if not tokens_received and stored:
+                for i in range(0, len(stored), self._FALLBACK_DELTA_CHARS):
+                    chunk = stored[i : i + self._FALLBACK_DELTA_CHARS]
+                    yield _sse_bytes({"type": "delta", "text": chunk})
+
+            yield _sse_bytes({"type": "done"})
+
+        resp = StreamingHttpResponse(gen(), content_type="text/event-stream; charset=utf-8")
+        resp["Cache-Control"] = "no-cache, no-transform"
+        resp["X-Accel-Buffering"] = "no"
+        return resp
 
 
 @method_decorator(csrf_exempt, name="dispatch")

@@ -43,7 +43,7 @@ INSTALLED_APPS = [
     # 自定义应用
     'User',
     'Langchain_rag',
-    'Langchain_Agent',
+    'Langchain_Agent.apps.LangchainAgentConfig',
     'Langchain_tool',
 ]
 

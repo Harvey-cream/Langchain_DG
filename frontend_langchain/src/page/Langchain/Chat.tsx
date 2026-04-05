@@ -1,14 +1,18 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Modal, message } from 'antd';
+import { CopyOutlined } from '@ant-design/icons';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import type { Components } from 'react-markdown';
 import {
-  chatWithAgent,
   getConversations,
   getConversationMessages,
   getUserInfo,
   patchConversation,
   deleteConversation,
 } from '../../services/api';
+import { chatWithAgentStream, formatAssistantDisplayText } from '../../services/chatStream';
 import ChatSidebar, { ConversationItem } from './ChatSidebar';
 import './Chat.css';
 
@@ -31,6 +35,9 @@ type ChatViewProps = {
   onInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
   onSendMessage: () => void;
+  /** 流式生成中：显示「中止」并调用以中断请求 */
+  streamActive: boolean;
+  onStopStream: () => void;
   onSelectConversation: (conversationId: number) => Promise<void> | void;
   onCreateConversation: () => void;
   onRenameConversation: (conversationId: number, title: string) => Promise<void>;
@@ -39,6 +46,20 @@ type ChatViewProps = {
 };
 
 const DEFAULT_FEATURE_TITLE = 'AI超级智能体';
+
+function extractPlainText(node: React.ReactNode): string {
+  if (node == null || node === false) return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractPlainText).join('');
+  if (React.isValidElement(node) && node.props && typeof node.props === 'object' && node.props !== null && 'children' in node.props) {
+    return extractPlainText((node.props as { children?: React.ReactNode }).children);
+  }
+  return '';
+}
+
+async function copyToClipboard(text: string): Promise<void> {
+  await navigator.clipboard.writeText(text);
+}
 
 const ChatView: React.FC<ChatViewProps> = ({
   featureTitle = DEFAULT_FEATURE_TITLE,
@@ -52,12 +73,37 @@ const ChatView: React.FC<ChatViewProps> = ({
   onInputChange,
   onKeyDown,
   onSendMessage,
+  streamActive,
+  onStopStream,
   onSelectConversation,
   onCreateConversation,
   onRenameConversation,
   onDeleteConversation,
   onPinConversation,
 }) => {
+  const mdComponents: Components = {
+    pre: ({ children }: { children?: React.ReactNode }) => {
+      const raw = extractPlainText(children).replace(/\n$/, '');
+      return (
+        <div className="chat-pre-wrap">
+          <button
+            type="button"
+            className="chat-code-copy"
+            onClick={() => {
+              void copyToClipboard(raw).then(
+                () => message.success('代码已复制'),
+                () => message.error('复制失败')
+              );
+            }}
+          >
+            复制
+          </button>
+          <pre className="chat-pre">{children}</pre>
+        </div>
+      );
+    },
+  };
+
   return (
     <div className="chat-layout">
       <ChatSidebar
@@ -81,12 +127,59 @@ const ChatView: React.FC<ChatViewProps> = ({
           {messages
             /* 后端在生成中可能已落库 question、但 ai_response 仍为空，避免渲染空白 AI 气泡 */
             .filter(m => m.isUser || m.content.trim())
-            .map(message => (
-            <div key={message.id} className={`message ${message.isUser ? 'user-message' : 'ai-message'}`}>
-              <div className="message-content">{message.content}</div>
-              <div className="message-time">{message.timestamp}</div>
+            .map(msg => {
+              const aiDisplay = msg.isUser ? '' : formatAssistantDisplayText(msg.content);
+              const aiPending =
+                !msg.isUser &&
+                isLoading &&
+                !aiDisplay.trim() &&
+                msg.content.trim().length > 0;
+              return (
+            <div key={msg.id} className={`message ${msg.isUser ? 'user-message' : 'ai-message'}`}>
+              <div className="message-bubble-row">
+                <div
+                  className={`message-content ${msg.isUser ? '' : 'message-content-md'}`}
+                >
+                  {msg.isUser ? (
+                    msg.content
+                  ) : aiPending ? (
+                    <span className="chat-assistant-pending">正在生成回复…</span>
+                  ) : !aiDisplay.trim() ? (
+                    <span className="chat-assistant-fallback">（无有效回复）</span>
+                  ) : (
+                    <div className="chat-markdown">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                        {aiDisplay}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+                </div>
+                {!msg.isUser && (
+                  <button
+                    type="button"
+                    className="message-copy-fab"
+                    title="复制可见正文"
+                    aria-label="复制可见正文"
+                    onClick={() => {
+                      const text = aiDisplay.trim();
+                      if (!text) {
+                        message.warning('暂无可复制的正文');
+                        return;
+                      }
+                      void copyToClipboard(text).then(
+                        () => message.success('已复制'),
+                        () => message.error('复制失败')
+                      );
+                    }}
+                  >
+                    <CopyOutlined />
+                  </button>
+                )}
+              </div>
+              <div className="message-time">{msg.timestamp}</div>
             </div>
-          ))}
+              );
+            })}
           {isLoading && (
             <div className="message ai-message">
               <div className="message-content">
@@ -110,9 +203,15 @@ const ChatView: React.FC<ChatViewProps> = ({
             placeholder="请输入消息..."
             className="chat-input"
           />
-          <button onClick={onSendMessage} className="send-button">
-            发送
-          </button>
+          {streamActive ? (
+            <button type="button" onClick={onStopStream} className="send-button send-button-stop">
+              中止
+            </button>
+          ) : (
+            <button type="button" onClick={onSendMessage} className="send-button">
+              发送
+            </button>
+          )}
         </div>
 {/* 
         <div className="chat-footer">
@@ -143,7 +242,16 @@ const Chat: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const conversationIdRef = useRef<number | undefined>(undefined);
   const logoutModalShownRef = useRef(false);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const userAbortRef = useRef(false);
+  const streamActiveRef = useRef(false);
+  const [streamActive, setStreamActive] = useState(false);
   const navigate = useNavigate();
+
+  const handleStopStream = useCallback(() => {
+    userAbortRef.current = true;
+    streamAbortRef.current?.abort();
+  }, []);
 
   const handleForceLogout = useCallback((msg: string) => {
     if (logoutModalShownRef.current) return;
@@ -188,6 +296,9 @@ const Chat: React.FC = () => {
         throw new Error('delete failed');
       }
       if (conversationId === id) {
+        streamAbortRef.current?.abort();
+        streamActiveRef.current = false;
+        setStreamActive(false);
         setIsLoading(false);
         setLoadingConversationId(undefined);
         setConversationId(undefined);
@@ -278,10 +389,18 @@ const Chat: React.FC = () => {
   };
 
   const handleSendMessage = async () => {
+    if (streamActiveRef.current) return;
+
     const messageText = inputMessage.trim();
     if (!messageText) return;
 
     const startConversationId = conversationIdRef.current;
+
+    userAbortRef.current = false;
+    const abortController = new AbortController();
+    streamAbortRef.current = abortController;
+    streamActiveRef.current = true;
+    setStreamActive(true);
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -295,67 +414,151 @@ const Chat: React.FC = () => {
     setIsLoading(true);
     setLoadingConversationId(startConversationId);
 
+    let streamingMsgId: string | null = null;
+
     try {
-      const response = await chatWithAgent(messageText, conversationId);
+      await chatWithAgentStream(
+        messageText,
+        conversationId,
+        {
+        onMeta: ({ conversation_id }) => {
+          if (conversationIdRef.current === startConversationId) {
+            setConversationId(conversation_id);
+            setLoadingConversationId(conversation_id);
+          }
+        },
+        onDelta: text => {
+          if (conversationIdRef.current !== startConversationId) return;
+          if (!streamingMsgId) {
+            const id = `ai-${Date.now()}`;
+            streamingMsgId = id;
+            setIsLoading(false);
+            setMessages(prev => [
+              ...prev,
+              {
+                id,
+                content: text,
+                isUser: false,
+                timestamp: new Date().toLocaleTimeString(),
+              },
+            ]);
+          } else {
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === streamingMsgId ? { ...m, content: m.content + text } : m
+              )
+            );
+          }
+        },
+        onError: errText => {
+          if (conversationIdRef.current !== startConversationId) return;
+          const line = `\n\n[错误] ${errText}`;
+          if (!streamingMsgId) {
+            const id = `ai-${Date.now()}`;
+            streamingMsgId = id;
+            setIsLoading(false);
+            setMessages(prev => [
+              ...prev,
+              {
+                id,
+                content: line.trim(),
+                isUser: false,
+                timestamp: new Date().toLocaleTimeString(),
+              },
+            ]);
+          } else {
+            setMessages(prev =>
+              prev.map(m => (m.id === streamingMsgId ? { ...m, content: m.content + line } : m))
+            );
+          }
+        },
+        onDone: () => {
+          void loadConversations();
+        },
+      },
+        { signal: abortController.signal }
+      );
 
-      if (response?.success === false && (response?.msg || '').includes('认证失败')) {
-        handleForceLogout('登录已失效，请重新登录');
-        return;
-      }
-
-      if (response?.data?.conversation_id) {
-        // 新建会话时 loading 归属需要切换到后端返回的 conversation_id
-        if (conversationIdRef.current === startConversationId) {
-          setConversationId(response.data.conversation_id);
-          setLoadingConversationId(response.data.conversation_id);
-        }
-      }
-
-      // 如果用户在请求期间切换了会话，则不再把这次 AI 回复追加到其它会话里
       if (conversationIdRef.current !== startConversationId) {
         await loadConversations();
         return;
       }
 
-      const aiReply = response?.data?.reply || response?.msg || '模型暂无回复';
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: aiReply,
-        isUser: false,
-        timestamp: new Date().toLocaleTimeString(),
-      };
-      setMessages(prev => [...prev, aiMessage]);
-      await loadConversations();
+      if (!streamingMsgId) {
+        setMessages(prev => [
+          ...prev,
+          {
+            id: `ai-${Date.now()}`,
+            content: '（模型未返回内容）',
+            isUser: false,
+            timestamp: new Date().toLocaleTimeString(),
+          },
+        ]);
+      }
     } catch (error) {
-      const err = error as {
-        response?: { data?: { msg?: string; message?: string }; status?: number };
-        message?: string;
-      };
-      const errorMessage =
-        err?.response?.data?.msg ||
-        err?.response?.data?.message ||
-        err?.message ||
-        '调用失败，请稍后重试';
+      const err = error as { name?: string; message?: string };
+      if (err?.name === 'AbortError') {
+        const userStopped = userAbortRef.current;
+        if (userStopped) {
+          message.info('已中止生成');
+        } else {
+          message.warning('长时间未收到模型输出，连接已中断');
+        }
+        const tail = userStopped ? '（已中止）' : '（已中断：长时间无数据）';
+        if (conversationIdRef.current === startConversationId) {
+          if (!streamingMsgId) {
+            setMessages(prev => [
+              ...prev,
+              {
+                id: `ai-${Date.now()}`,
+                content: tail,
+                isUser: false,
+                timestamp: new Date().toLocaleTimeString(),
+              },
+            ]);
+          } else {
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === streamingMsgId ? { ...m, content: `${m.content}\n\n${tail}` } : m
+              )
+            );
+          }
+        }
+        return;
+      }
 
-      if (err?.response?.status === 401 || errorMessage.includes('认证失败')) {
+      const errorMessage = err?.message || '调用失败，请稍后重试';
+      if (errorMessage.includes('认证失败') || errorMessage.includes('未登录')) {
         handleForceLogout('登录已失效，请重新登录');
         return;
       }
 
-      // 请求期间若已切换会话，不追加错误信息到其它会话
       if (conversationIdRef.current !== startConversationId) {
         await loadConversations();
         return;
       }
 
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: errorMessage,
-        isUser: false,
-        timestamp: new Date().toLocaleTimeString(),
-      };
-      setMessages(prev => [...prev, aiMessage]);
+      if (!streamingMsgId) {
+        setMessages(prev => [
+          ...prev,
+          {
+            id: `ai-${Date.now()}`,
+            content: errorMessage,
+            isUser: false,
+            timestamp: new Date().toLocaleTimeString(),
+          },
+        ]);
+      } else {
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === streamingMsgId ? { ...m, content: m.content || errorMessage } : m
+          )
+        );
+      }
     } finally {
+      streamActiveRef.current = false;
+      setStreamActive(false);
+      streamAbortRef.current = null;
       setIsLoading(false);
       setLoadingConversationId(undefined);
     }
@@ -364,7 +567,8 @@ const Chat: React.FC = () => {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSendMessage();
+      if (streamActiveRef.current) return;
+      void handleSendMessage();
     }
   };
 
@@ -385,6 +589,8 @@ const Chat: React.FC = () => {
         onInputChange={(e) => setInputMessage(e.target.value)}
         onKeyDown={handleKeyDown}
         onSendMessage={handleSendMessage}
+        streamActive={streamActive}
+        onStopStream={handleStopStream}
         onSelectConversation={handleSelectConversation}
         onCreateConversation={handleCreateConversation}
         onRenameConversation={handleRenameConversation}
