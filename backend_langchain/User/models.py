@@ -83,3 +83,64 @@ class UserSession(models.Model):
 
     def __str__(self):
         return f"会话{self.id}-用户{self.user_id}"
+
+
+class InterviewConversation(models.Model):
+    """
+    AI 面试大师专用：与用户对话会话分离，使用独立表 interview_conversations。
+    """
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="interview_conversations",
+        db_column="user_id",
+        verbose_name="用户ID",
+    )
+    title = models.CharField(max_length=255, default="新对话", verbose_name="会话标题")
+    pinned = models.BooleanField(default=False, verbose_name="置顶")
+    pinned_at = models.DateTimeField(null=True, blank=True, verbose_name="置顶时间")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+
+    class Meta:
+        db_table = "interview_conversations"
+        verbose_name = "面试会话"
+        verbose_name_plural = "面试会话"
+        ordering = ["-pinned", "pinned_at", "-updated_at"]
+
+    def __str__(self):
+        return f"面试会话{self.id}-{self.title}"
+
+
+class InterviewSession(models.Model):
+    """面试对话轮次，表 interview_sessions。"""
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="interview_sessions",
+        db_column="user_id",
+        verbose_name="用户ID",
+    )
+    conversation = models.ForeignKey(
+        InterviewConversation,
+        on_delete=models.CASCADE,
+        related_name="messages",
+        db_column="conversation_id",
+        verbose_name="会话ID",
+        null=True,
+        blank=True,
+    )
+    question = models.TextField(verbose_name="用户问题")
+    ai_response = models.TextField(verbose_name="AI模型返回内容")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="对话时间")
+
+    class Meta:
+        db_table = "interview_sessions"
+        verbose_name = "面试会话消息"
+        verbose_name_plural = "面试会话消息"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"面试消息{self.id}-用户{self.user_id}"

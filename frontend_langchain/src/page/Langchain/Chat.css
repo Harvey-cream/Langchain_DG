@@ -64,6 +64,24 @@
   white-space: nowrap;
 }
 
+.chat-sidebar-back-home {
+  width: 100%;
+  margin-bottom: 10px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: transparent;
+  color: #94a3b8;
+  height: 34px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.chat-sidebar-back-home:hover {
+  color: #e2e8f0;
+  border-color: #475569;
+  background: rgba(148, 163, 184, 0.08);
+}
+
 .new-chat-button {
   width: 100%;
   border: none;
@@ -311,6 +329,15 @@
   line-height: 1.55;
   word-break: break-word;
   text-align: left;
+}
+
+/* 流式中：纯文本增量（避免每帧全量 Markdown 解析）；样式与 .chat-markdown 对齐，结束时切换为 remark */
+.chat-stream-plain {
+  font-size: 14px;
+  line-height: 1.55;
+  word-break: break-word;
+  text-align: left;
+  white-space: pre-wrap;
 }
 
 .chat-markdown h2 {

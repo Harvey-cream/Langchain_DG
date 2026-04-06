@@ -12,8 +12,10 @@ export const login = (params: LoginRequest) => sendReleaseRequest("/api/user/log
 //
 // 发送一条「流式」对话消息不在本文件里封装：见 services/chatStream.ts。
 // 原因：流式必须用 fetch + response.body.getReader() 读 SSE，而 sendRequest 基于 axios，
-// 不适合消费 text/event-stream；路径为 POST /api/agent/chat/stream/。
+// 不适合消费 text/event-stream；路径见 chatStream（/api/agent/chat/stream/、/api/interview/chat/stream/）。
 //
+
+// --- 超级智能体（/api/agent/，表 user_conversations / user_sessions）---
 
 // 获取会话列表
 export const getConversations = () => sendRequest("/api/agent/chat/", 'GET');
@@ -32,6 +34,24 @@ export const patchConversation = (params: {
 /** 删除会话（级联删除该会话下消息） */
 export const deleteConversation = (conversationId: number) =>
   sendRequest('/api/agent/conversation/', 'DELETE', { conversation_id: conversationId });
+
+// --- AI 面试大师（/api/interview/，表 interview_conversations / interview_sessions）---
+
+export const getInterviewConversations = () => sendRequest('/api/interview/chat/', 'GET');
+
+export const getInterviewConversationMessages = (conversationId: number) =>
+  sendRequest(`/api/interview/chat/?conversation_id=${conversationId}`, 'GET');
+
+export const patchInterviewConversation = (params: {
+  conversation_id: number;
+  title?: string;
+  pinned?: boolean;
+}) => sendRequest('/api/interview/conversation/', 'PATCH', params);
+
+export const deleteInterviewConversation = (conversationId: number) =>
+  sendRequest('/api/interview/conversation/', 'DELETE', { conversation_id: conversationId });
+
+// --- 用户 ---
 
 // 获取用户信息
 export const getUserInfo = () => sendRequest("/api/user/info/", 'GET');

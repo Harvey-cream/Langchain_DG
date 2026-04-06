@@ -140,6 +140,9 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
         <div className="chat-sidebar-brand">
           <h2 className="chat-sidebar-feature-title">{featureTitle}</h2>
         </div>
+        <button type="button" className="chat-sidebar-back-home" onClick={() => navigate('/home')}>
+          ← 返回首页
+        </button>
         <button type="button" className="new-chat-button" onClick={onCreateConversation}>
           + 新对话
         </button>

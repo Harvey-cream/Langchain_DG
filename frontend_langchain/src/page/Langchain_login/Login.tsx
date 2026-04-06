@@ -147,7 +147,7 @@ const Login: React.FC = () => {
             localStorage.setItem('token', response.data.token);
           }
           // 跳转到聊天页面
-          navigate('/chat');
+          navigate('/home');
         } else {
           setErrors({ submit: response.message });
         }

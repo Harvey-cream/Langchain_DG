@@ -10,6 +10,16 @@ _agent_executor_cache: AgentExecutor | None = None
 _agent_executor_stream_cache: AgentExecutor | None = None
 
 
+def _agent_max_iterations() -> int:
+    """ReAct 每步一轮 Thought/Action/Observation；步数过大易拖时长、像死循环。默认 10，上限 10，可用 AGENT_MAX_ITERATIONS 在 1～10 间微调。"""
+    raw = os.getenv("AGENT_MAX_ITERATIONS", "10")
+    try:
+        n = int(raw.strip())
+    except ValueError:
+        return 10
+    return max(1, min(n, 10))
+
+
 def _default_mcp_input_reader(prompt: str = "User: ") -> str:
     """
     这里先提供一个“框架级”的 MCP 输入读取接口：
@@ -26,7 +36,7 @@ def _default_mcp_input_reader(prompt: str = "User: ") -> str:
 def build_react_rag_agent(
     *,
     tools: Optional[Sequence[Any]] = None,
-    temperature: float = 0.2,
+    temperature: float = 0.45,
     verbose: bool = False,
     streaming: bool = False,
 ) -> AgentExecutor:
@@ -36,18 +46,34 @@ def build_react_rag_agent(
         tools = list(RAG_TOOLS)
 
     # ZERO_SHOT_REACT_DESCRIPTION：让模型按 ReAct 方式描述思考与调用工具
+    # max_iterations：见 _agent_max_iterations()（默认 10，防长时间空转）
+    max_iter = _agent_max_iterations()
+    agent_kwargs: dict = {}
+    t_raw = os.getenv("AGENT_MAX_EXECUTION_TIME", "").strip()
+    if t_raw:
+        try:
+            agent_kwargs["max_execution_time"] = float(t_raw)
+        except ValueError:
+            pass
+
+    # handle_parsing_errors：False 时任意一次格式不合规（如闲聊只输出一句无 Thought/Final Answer）会直接抛错给用户。
+    # True 时把解析错误当 Observation 让模型重试；配合 max_iterations + early_stopping_method=force 可封顶，避免无限循环。
+    # ReAct 的「Final Answer:」是 LLM 须输出的格式前缀（给解析器用），不是「说完就停」的隐藏指令；正文里重复写由 prompt + Langchain_Agent/utils/SSE 后处理去掉。
     agent_executor = initialize_agent(
         tools=tools,
         llm=llm,
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
         verbose=verbose,
         handle_parsing_errors=True,
+        early_stopping_method="force",
+        max_iterations=max_iter,
+        **agent_kwargs,
     )
 
     return agent_executor
 
 
-def get_cached_agent_executor(*, temperature: float = 0.2, streaming: bool = False) -> AgentExecutor:
+def get_cached_agent_executor(*, temperature: float = 0.45, streaming: bool = False) -> AgentExecutor:
     """非流式用于普通 chat；streaming=True 使用独立缓存，千问以 token 流式输出。"""
     global _agent_executor_cache, _agent_executor_stream_cache
     if streaming:
@@ -63,7 +89,7 @@ def invoke_agent_with_stream_callbacks(
     user_input: str,
     callbacks: Sequence[Any],
     *,
-    temperature: float = 0.2,
+    temperature: float = 0.45,
 ) -> str:
     """ReAct+RAG，LLM 侧开启流式；callbacks 可接收 on_llm_new_token（含多轮 Thought/Action/Final）。"""
     agent_executor = get_cached_agent_executor(temperature=temperature, streaming=True)
@@ -76,7 +102,7 @@ def chat(
     user_input: str,
     *,
     mcp_input_reader: Optional[Callable[[], str]] = None,
-    temperature: float = 0.2,
+    temperature: float = 0.45,
 ) -> str:
     """
     框架入口：ReAct + RAG。

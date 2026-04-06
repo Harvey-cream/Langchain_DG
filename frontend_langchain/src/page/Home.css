@@ -1,0 +1,172 @@
+/* 铺满视口、不出现整页滚动条：不用 100vw（会触发横向滚动），用 fixed + inset:0 */
+
+.home-page {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  max-height: 100vh;
+  max-height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(12px, 3vmin, 24px);
+  background:
+    radial-gradient(ellipse 120% 80% at 50% -20%, rgba(14, 165, 233, 0.2), transparent 55%),
+    linear-gradient(165deg, #0b1220 0%, #111c2e 42%, #0c1929 100%);
+}
+
+.home-landing {
+  position: relative;
+  width: 100%;
+  max-width: 960px;
+  max-height: 100%;
+  flex: 0 1 auto;
+  padding: clamp(0.75rem, 2vw, 1.5rem);
+  text-align: center;
+  box-sizing: border-box;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(1rem, 3vh, 2rem);
+  padding-bottom: 80px;
+}
+
+.home-grid-bg {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(56, 189, 248, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 189, 248, 0.08) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.home-header {
+  position: relative;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.home-title {
+  margin: 0 0 0.75rem;
+  font-size: clamp(1.5rem, 4vw, 2.25rem);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #e0f2fe;
+  text-shadow:
+    0 0 20px rgba(34, 211, 238, 0.55),
+    0 0 40px rgba(6, 182, 212, 0.35);
+}
+
+.home-subtitle {
+  margin: 0;
+  font-size: 0.95rem;
+  color: rgba(226, 232, 240, 0.85);
+  font-weight: 400;
+}
+
+.home-cards {
+  position: relative;
+  flex-shrink: 1;
+  min-height: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(0.75rem, 2vw, 1.5rem);
+  justify-content: center;
+  align-items: stretch;
+}
+
+.home-card {
+  flex: 1 1 min(280px, 100%);
+  max-width: 400px;
+  padding: clamp(1.25rem, 3vw, 1.75rem) clamp(1rem, 2.5vw, 1.5rem);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98));
+  border: 1px solid rgba(56, 189, 248, 0.15);
+  box-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.5),
+    0 12px 40px rgba(8, 47, 73, 0.35);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.home-card-icon {
+  width: clamp(56px, 12vw, 72px);
+  height: clamp(56px, 12vw, 72px);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(24px, 6vw, 32px);
+  color: #fff;
+  margin-bottom: 0.75rem;
+}
+
+.home-card-icon--agent {
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.45);
+}
+
+.home-card-icon--interview {
+  background: linear-gradient(135deg, #0d9488, #0f766e);
+  box-shadow: 0 8px 24px rgba(13, 148, 136, 0.45);
+}
+
+.home-card-title {
+  margin: 0 0 0.5rem;
+  font-size: clamp(1rem, 2.8vw, 1.15rem);
+  font-weight: 700;
+  color: #f8fafc;
+  line-height: 1.35;
+}
+
+.home-card-desc {
+  margin: 0 0 1rem;
+  font-size: clamp(0.8rem, 2.2vw, 0.875rem);
+  color: #94a3b8;
+  line-height: 1.5;
+  flex: 1;
+}
+
+.home-card-btn {
+  width: 100%;
+  max-width: 220px;
+  padding: 0.65rem 1.25rem;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2563eb, #1d4ed8);
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.2s, transform 0.15s;
+}
+
+.home-card-btn:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.home-card-btn:active {
+  transform: translateY(0);
+}
+
+@media (max-width: 640px) {
+  .home-cards {
+    flex-direction: column;
+  }
+
+  .home-card {
+    max-width: none;
+  }
+}
