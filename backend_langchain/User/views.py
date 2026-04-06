@@ -6,8 +6,8 @@ from .models import User
 from .utils.user_utils import get_current_user
 from .utils.jwt_token import create_token
 from .utils.sm2 import request_handler
-from common.response_web import HttpResult
-from common.utils import format_datetime
+from common_web.response_web import HttpResult
+from common_web.utils import format_datetime
 
 
 class UserRegisterView(APIView):

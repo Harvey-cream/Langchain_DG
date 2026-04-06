@@ -3,8 +3,8 @@ import os
 from typing import Callable, Optional, Sequence, Any
 from langchain.agents import AgentExecutor, AgentType, initialize_agent
 from common.LLM.config import get_qwen_chat_model
-from .utils.answer_format_prompt import wrap_user_message_for_agent
-from .tools import RAG_TOOLS
+from Langchain_Agent.utils.answer_format_prompt import wrap_user_message_for_agent
+from Langchain_Agent.tools import RAG_TOOLS
 
 _agent_executor_cache: AgentExecutor | None = None
 _agent_executor_stream_cache: AgentExecutor | None = None
@@ -58,7 +58,7 @@ def build_react_rag_agent(
 
     # handle_parsing_errors：False 时任意一次格式不合规（如闲聊只输出一句无 Thought/Final Answer）会直接抛错给用户。
     # True 时把解析错误当 Observation 让模型重试；配合 max_iterations + early_stopping_method=force 可封顶，避免无限循环。
-    # ReAct 的「Final Answer:」是 LLM 须输出的格式前缀（给解析器用），不是「说完就停」的隐藏指令；正文里重复写由 prompt + Langchain_Agent/utils/SSE 后处理去掉。
+    # ReAct 的「Final Answer:」是 LLM 须输出的格式前缀（给解析器用），不是「说完就停」的隐藏指令；正文里重复写由 prompt + common.SSE 后处理去掉。
     agent_executor = initialize_agent(
         tools=tools,
         llm=llm,

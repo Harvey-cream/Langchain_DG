@@ -21,7 +21,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     # 用户相关API
     path('api/user/', include('User.urls')),
-    # Langchain_Agent/urls.py 内已写全 api/agent/... 与 api/interview/...
     path('', include('Langchain_Agent.urls')),
+    path('', include('Langchain_Agent1.urls')),
 ]
 

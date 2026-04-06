@@ -42,9 +42,8 @@ INSTALLED_APPS = [
     'corsheaders',
     # 自定义应用
     'User',
-    'Langchain_rag',
     'Langchain_Agent.apps.LangchainAgentConfig',
-    'Langchain_tool',
+    'Langchain_Agent1.apps.LangchainAgent1Config',
 ]
 
 MIDDLEWARE = [
