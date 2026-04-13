@@ -98,6 +98,12 @@ class InterviewConversation(models.Model):
         verbose_name="用户ID",
     )
     title = models.CharField(max_length=255, default="新对话", verbose_name="会话标题")
+    interview_track = models.CharField(
+        max_length=16,
+        default="llm",
+        verbose_name="面试题库方向",
+        help_text="llm=AI大模型面试题 java=Java vue=Vue前端",
+    )
     pinned = models.BooleanField(default=False, verbose_name="置顶")
     pinned_at = models.DateTimeField(null=True, blank=True, verbose_name="置顶时间")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")

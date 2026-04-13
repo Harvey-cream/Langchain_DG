@@ -115,7 +115,8 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
     避免流式分片在凑齐正则前把「\\n\\nFinal」误发给前端。
     """
 
-    _HOLDBACK = 48
+    # 过小易把「Final Answer」拆片误发；过大则正文会像「攒一大段才推」——体感像非流式
+    _HOLDBACK = 16
 
     def __init__(self, q: Queue) -> None:
         self._q = q

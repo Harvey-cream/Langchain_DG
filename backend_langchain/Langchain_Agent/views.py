@@ -18,7 +18,7 @@ from User.models import UserConversation, UserSession
 from User.utils.user_utils import get_current_user
 from common_web.response_web import HttpResult
 from common_web.utils import format_datetime
-from common.LLM.config import get_qwen_chat_model
+from config.config import get_qwen_chat_model
 from langchain_core.messages import HumanMessage
 from django.utils import timezone
 from common.agent import chat as agent_chat, invoke_agent_with_stream_callbacks

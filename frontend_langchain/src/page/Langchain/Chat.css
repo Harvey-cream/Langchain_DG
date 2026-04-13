@@ -526,10 +526,43 @@
 .chat-input-area {
   flex-shrink: 0;
   display: flex;
+  flex-direction: column;
   padding: 16px;
   background-color: white;
   border-top: 1px solid #e8e8e8;
+  gap: 10px;
+}
+
+.chat-input-row {
+  display: flex;
   gap: 12px;
+  align-items: center;
+  width: 100%;
+}
+
+.chat-interview-track-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chat-interview-track-hint {
+  font-size: 13px;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.chat-interview-track-seg .ant-segmented {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-sidebar-track-tag {
+  margin-inline-start: 6px !important;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0 6px;
 }
 
 .chat-input {
@@ -548,7 +581,12 @@
 }
 
 .send-button {
-  padding: 0 24px;
+  /* 与 .chat-input 垂直内边距对齐，避免仅左右 padding 导致按钮高度远小于输入框 */
+  padding: 12px 24px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  min-height: 44px;
+  line-height: 1.4;
   background-color: #1890ff;
   color: white;
   border: none;

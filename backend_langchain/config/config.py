@@ -7,7 +7,10 @@ from dotenv import load_dotenv
 
 # OpenAI 兼容 API：用 langchain_openai（与 openai 1.x SDK 一致），勿再用 langchain_community 里已弃用的 ChatOpenAI
 from langchain_openai import ChatOpenAI
-from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
 from langchain_core.messages import BaseMessage
 
 # from langchain_community.chat_models import ChatOllama
@@ -33,11 +36,41 @@ LLM_AGENT_MODEL = os.getenv("LLM_AGENT_MODEL", "gpt-5.4")
 
 class _AgentStreamChatOpenAI(ChatOpenAI):
     """
-    ReAct 的 LLMChain 调用 generate_prompt 时不会传入 stream=True；
-    langchain_core 只有在 kwargs['stream'] 为 True 时才走 _stream + on_llm_new_token，
-    否则整段 _generate 一次返回，前端 SSE 会像「非流式」只收到一块。
-    在 streaming=True 时强制把 stream 传入 _generate_with_cache。
+    流式输出必须走 OpenAI 的 stream=True，才会触发 on_llm_new_token（配合 common.SSE 只推 Final Answer 后正文）。
+
+    - BaseChatModel._generate_with_cache：需在 kwargs 里带 stream=True 才会走 _stream 循环。
+    - ChatOpenAI._generate：若上层显式传入 stream=False，会覆盖 self.streaming，整段返回、体感像非流式。
+    构造时的 streaming=True 只设「默认」；AgentExecutor 仍可能传 stream=False，故仍需在 _generate / _agenerate / *_generate_with_cache 里强制 stream=True。
+    （用户可见「格式」由 prompt + SSE 清洗负责，与这里无关。）
     """
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        stream: Optional[bool] = None,
+        **kwargs: Any,
+    ) -> Any:
+        if self.streaming:
+            stream = True
+        return super()._generate(
+            messages, stop=stop, run_manager=run_manager, stream=stream, **kwargs
+        )
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        stream: Optional[bool] = None,
+        **kwargs: Any,
+    ) -> Any:
+        if self.streaming:
+            stream = True
+        return await super()._agenerate(
+            messages, stop=stop, run_manager=run_manager, stream=stream, **kwargs
+        )
 
     def _generate_with_cache(
         self,
@@ -69,17 +102,18 @@ class _AgentStreamChatOpenAI(ChatOpenAI):
 def get_qwen_chat_model(temperature: float = 0.7, *, streaming: bool = False) -> Any:
     """
     获取 Chat 模型实例。
-    当前使用 OpenAI 兼容 HTTP API（默认 LLM_AGENT_BASE_URL，如 gpt-agent.cc）；Langchain_Agent 经此函数接入。
+    当前使用 OpenAI 兼容 HTTP API（默认 LLM_AGENT_BASE_URL，如 gpt-agent.cc）；经此函数接入。
+    streaming=True 时使用 _AgentStreamChatOpenAI，保证底层请求始终带 stream=True，便于 SSE 按 token 推送。
     """
     common = dict(
         model=LLM_AGENT_MODEL,
         api_key=LLM_AGENT_API_KEY,
         base_url=LLM_AGENT_BASE_URL,
         temperature=temperature,
-        streaming=streaming,
     )
     if streaming:
-        return _AgentStreamChatOpenAI(**common)
+        return _AgentStreamChatOpenAI(**common, streaming=True)
+    # 仅非流式场景（如标题润色、同步 POST chat）：一次返回全文；与 SSE 无关
     return ChatOpenAI(**common)
 
 
@@ -88,7 +122,7 @@ if __name__ == "__main__":
 
     llm = get_qwen_chat_model()
     print("模型加载成功，正在回答...")
-    response = llm.invoke([HumanMessage(content="你是哪个模型")])
+    response = llm.invoke([HumanMessage(content="你在干什么呀，你会做什么？")])
     # print(response)
     print(getattr(response, "content", response))
 

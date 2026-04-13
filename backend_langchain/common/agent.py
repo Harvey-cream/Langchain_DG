@@ -1,13 +1,28 @@
 from __future__ import annotations
 import os
+import sys
+from pathlib import Path
 from typing import Callable, Optional, Sequence, Any
 from langchain.agents import AgentExecutor, AgentType, initialize_agent
-from common.LLM.config import get_qwen_chat_model
+
+# 兼容两种运行方式：
+# 1) python -m backend_langchain.common.agent
+# 2) python common/agent.py  (cwd=backend_langchain)
+if __package__ in {None, ""}:
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+from config.config import get_qwen_chat_model
 from Langchain_Agent.utils.answer_format_prompt import wrap_user_message_for_agent
 from Langchain_Agent.tools import RAG_TOOLS
 
 _agent_executor_cache: AgentExecutor | None = None
 _agent_executor_stream_cache: AgentExecutor | None = None
+
+# 面试大师：三套 rag 工具 + 统一 prompt，与非流式/流式各一份缓存
+_interview_agent_executor_cache: AgentExecutor | None = None
+_interview_agent_executor_stream_cache: AgentExecutor | None = None
 
 
 def _agent_max_iterations() -> int:
@@ -73,6 +88,28 @@ def build_react_rag_agent(
     return agent_executor
 
 
+def get_interview_agent_executor(
+    *,
+    temperature: float = 0.45,
+    streaming: bool = False,
+) -> AgentExecutor:
+    """ReAct + 三套面试向量库工具，由模型自行选用。"""
+    global _interview_agent_executor_cache, _interview_agent_executor_stream_cache
+    from Langchain_Agent1.tools import INTERVIEW_RAG_TOOLS
+
+    if streaming:
+        if _interview_agent_executor_stream_cache is None:
+            _interview_agent_executor_stream_cache = build_react_rag_agent(
+                tools=list(INTERVIEW_RAG_TOOLS), temperature=temperature, streaming=True
+            )
+        return _interview_agent_executor_stream_cache
+    if _interview_agent_executor_cache is None:
+        _interview_agent_executor_cache = build_react_rag_agent(
+            tools=list(INTERVIEW_RAG_TOOLS), temperature=temperature, streaming=False
+        )
+    return _interview_agent_executor_cache
+
+
 def get_cached_agent_executor(*, temperature: float = 0.45, streaming: bool = False) -> AgentExecutor:
     """非流式用于普通 chat；streaming=True 使用独立缓存，千问以 token 流式输出。"""
     global _agent_executor_cache, _agent_executor_stream_cache
@@ -94,6 +131,37 @@ def invoke_agent_with_stream_callbacks(
     """ReAct+RAG，LLM 侧开启流式；callbacks 可接收 on_llm_new_token（含多轮 Thought/Action/Final）。"""
     agent_executor = get_cached_agent_executor(temperature=temperature, streaming=True)
     prompt = wrap_user_message_for_agent(user_input)
+    out = agent_executor.invoke({"input": prompt}, config={"callbacks": list(callbacks)})
+    return out.get("output") if isinstance(out, dict) else str(out)
+
+
+def chat_interview(
+    user_input: str,
+    *,
+    temperature: float = 0.45,
+) -> str:
+    """面试大师：ReAct + 多工具 RAG，系统前缀见 Langchain_Agent1.utils.prompt。"""
+    from Langchain_Agent1.utils.prompt import wrap_interview_user_message
+
+    if not user_input.strip():
+        raise ValueError("user_input is empty")
+
+    agent_executor = get_interview_agent_executor(temperature=temperature, streaming=False)
+    prompt = wrap_interview_user_message(user_input)
+    out = agent_executor.invoke({"input": prompt})
+    return out.get("output") if isinstance(out, dict) else str(out)
+
+
+def invoke_interview_agent_with_stream_callbacks(
+    user_input: str,
+    callbacks: Sequence[Any],
+    *,
+    temperature: float = 0.45,
+) -> str:
+    from Langchain_Agent1.utils.prompt import wrap_interview_user_message
+
+    agent_executor = get_interview_agent_executor(temperature=temperature, streaming=True)
+    prompt = wrap_interview_user_message(user_input)
     out = agent_executor.invoke({"input": prompt}, config={"callbacks": list(callbacks)})
     return out.get("output") if isinstance(out, dict) else str(out)
 
@@ -139,9 +207,9 @@ def cli():
         if user_input.strip().lower() in {"exit", "quit", "q"}:
             print("bye")
             return
-
+        prompt = wrap_user_message_for_agent(user_input)
         # 直接复用同一个 executor，避免每次重建
-        print(agent_executor.run(user_input))
+        print(agent_executor.run(prompt))
 
 
 if __name__ == "__main__":

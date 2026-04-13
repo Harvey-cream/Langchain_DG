@@ -4,6 +4,7 @@ import { Modal, message } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import type { Components } from 'react-markdown';
 import { getUserInfo } from '../../services/api';
 import type { ChatApiClient } from '../../services/chatApi';
@@ -34,6 +35,7 @@ type ChatViewProps = {
   inputMessage: string;
   isLoading: boolean;
   messagesEndRef: React.RefObject<HTMLDivElement>;
+  messagesContainerRef: React.RefObject<HTMLDivElement>;
   onInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
   onSendMessage: () => void;
@@ -47,6 +49,23 @@ type ChatViewProps = {
   /** 当前 SSE 正在写入的助手消息 id；流式阶段纯文本，结束后 Markdown */
   streamingAssistantId: string | null;
 };
+
+/** 网络层 delta 合并：防重复片段、累计全文、后缀重叠去重 */
+function mergeStreamingDelta(previous: string, incoming: string): string {
+  const prev = previous || '';
+  const next = incoming || '';
+  if (!prev) return next;
+  if (!next) return prev;
+  if (next === prev || prev.endsWith(next)) return prev;
+  if (next.startsWith(prev)) return next;
+  const maxOverlap = Math.min(prev.length, next.length, 256);
+  for (let i = maxOverlap; i >= 1; i -= 1) {
+    if (prev.slice(-i) === next.slice(0, i)) {
+      return prev + next.slice(i);
+    }
+  }
+  return prev + next;
+}
 
 function extractPlainText(node: React.ReactNode): string {
   if (node == null || node === false) return '';
@@ -93,21 +112,14 @@ const AssistantBubbleContent = React.memo(function AssistantBubbleContent({
   rawContent: string;
   isStreaming: boolean;
 }) {
-  const aiDisplay = formatAssistantDisplayText(rawContent);
-  const remarkPlugins = useMemo(() => [remarkGfm], []);
+  const aiDisplay = formatAssistantDisplayText(rawContent, { streaming: isStreaming });
+  const remarkPlugins = useMemo(() => [remarkGfm, remarkBreaks], []);
 
-  const aiPending =
-    isStreaming && !aiDisplay.trim() && rawContent.trim().length > 0;
-
-  if (aiPending) {
+  if (isStreaming && !aiDisplay.trim()) {
     return <span className="chat-assistant-pending">正在生成回复…</span>;
   }
   if (!aiDisplay.trim()) {
     return <span className="chat-assistant-fallback">（无有效回复）</span>;
-  }
-
-  if (isStreaming) {
-    return <div className="chat-stream-plain">{aiDisplay}</div>;
   }
 
   return (
@@ -128,6 +140,7 @@ const ChatView: React.FC<ChatViewProps> = ({
   inputMessage,
   isLoading,
   messagesEndRef,
+  messagesContainerRef,
   onInputChange,
   onKeyDown,
   onSendMessage,
@@ -159,7 +172,7 @@ const ChatView: React.FC<ChatViewProps> = ({
           <span className="chat-mobile-title">{featureTitle}</span>
         </div>
 
-        <div className="chat-messages">
+        <div className="chat-messages" ref={messagesContainerRef}>
           {messages
             .filter(m => m.isUser || m.content.trim())
             .map(msg => {
@@ -176,6 +189,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                     msg.content
                   ) : (
                     <AssistantBubbleContent
+                      key={`${msg.id}-${streamThis ? 'stream' : 'md'}`}
                       rawContent={msg.content}
                       isStreaming={streamThis}
                     />
@@ -222,23 +236,25 @@ const ChatView: React.FC<ChatViewProps> = ({
         </div>
 
         <div className="chat-input-area">
-          <input
-            type="text"
-            value={inputMessage}
-            onChange={onInputChange}
-            onKeyDown={onKeyDown}
-            placeholder="请输入消息..."
-            className="chat-input"
-          />
-          {streamActive ? (
-            <button type="button" onClick={onStopStream} className="send-button send-button-stop">
-              中止
-            </button>
-          ) : (
-            <button type="button" onClick={onSendMessage} className="send-button">
-              发送
-            </button>
-          )}
+          <div className="chat-input-row">
+            <input
+              type="text"
+              value={inputMessage}
+              onChange={onInputChange}
+              onKeyDown={onKeyDown}
+              placeholder="请输入消息..."
+              className="chat-input"
+            />
+            {streamActive ? (
+              <button type="button" onClick={onStopStream} className="send-button send-button-stop">
+                中止
+              </button>
+            ) : (
+              <button type="button" onClick={onSendMessage} className="send-button">
+                发送
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -254,6 +270,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
   const [conversationId, setConversationId] = useState<number | undefined>(undefined);
   const [userDisplayTag, setUserDisplayTag] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const conversationIdRef = useRef<number | undefined>(undefined);
   const logoutModalShownRef = useRef(false);
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -264,22 +281,21 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
   const [streamingAssistantId, setStreamingAssistantId] = useState<string | null>(null);
   const streamAccumRef = useRef<{ msgId: string | null; text: string }>({ msgId: null, text: '' });
   const streamFlushRafRef = useRef<number | null>(null);
+  const typewriterRafRef = useRef<number | null>(null);
+  const typewriterRevealLenRef = useRef(0);
+  /** SSE 已 done，等打字机追上全文后再关流式态、对账 */
+  const pendingStreamEndRef = useRef(false);
   const scrollRafRef = useRef<number | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const streamSessionIdRef = useRef<number | null>(null);
   const navigate = useNavigate();
 
-  const flushStreamContent = useCallback(() => {
-    streamFlushRafRef.current = null;
-    const { msgId, text } = streamAccumRef.current;
-    if (!msgId) return;
-    setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: text } : m)));
+  const cancelTypewriter = useCallback(() => {
+    if (typewriterRafRef.current != null) {
+      cancelAnimationFrame(typewriterRafRef.current);
+      typewriterRafRef.current = null;
+    }
   }, []);
-
-  const scheduleStreamFlush = useCallback(() => {
-    if (streamFlushRafRef.current != null) return;
-    streamFlushRafRef.current = requestAnimationFrame(() => {
-      flushStreamContent();
-    });
-  }, [flushStreamContent]);
 
   const handleStopStream = useCallback(() => {
     userAbortRef.current = true;
@@ -330,6 +346,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       }
       if (conversationId === id) {
         streamAbortRef.current?.abort();
+        cancelTypewriter();
+        pendingStreamEndRef.current = false;
         streamActiveRef.current = false;
         setStreamActive(false);
         setStreamingAssistantId(null);
@@ -340,7 +358,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       }
       await loadConversations();
     },
-    [chatApi, loadConversations, conversationId, welcomeMessage]
+    [chatApi, loadConversations, conversationId, welcomeMessage, cancelTypewriter]
   );
 
   const handlePinConversation = useCallback(
@@ -376,7 +394,26 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     })();
   }, [handleForceLogout, loadConversations]);
 
+  const updateStickToBottom = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    shouldStickToBottomRef.current = distanceToBottom <= 80;
+  }, []);
+
   useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const onScroll = () => updateStickToBottom();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [updateStickToBottom]);
+
+  useEffect(() => {
+    if (!streamActive && !shouldStickToBottomRef.current) {
+      return;
+    }
     if (scrollRafRef.current != null) {
       cancelAnimationFrame(scrollRafRef.current);
     }
@@ -397,6 +434,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
   useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
+
+  useEffect(() => () => cancelTypewriter(), [cancelTypewriter]);
 
   const handleSelectConversation = async (selectedConversationId: number): Promise<void> => {
     try {
@@ -436,6 +475,94 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     setMessages([welcomeMessage]);
   };
 
+  const reconcileStreamingMessageFromServer = useCallback(
+    async (targetConversationId: number, localStreamingMsgId: string | null) => {
+      if (!localStreamingMsgId) return;
+      try {
+        const response = await chatApi.getConversationMessages(targetConversationId);
+        if (!response?.success) return;
+        const history = response?.data?.messages || [];
+        const targetSessionId = streamSessionIdRef.current;
+        const matched = targetSessionId
+          ? history.find((item: { id: number }) => item.id === targetSessionId)
+          : history[history.length - 1];
+        const finalReply = String(matched?.ai_response ?? '').trim();
+        if (!finalReply) return;
+        setMessages(prev =>
+          prev.map(m => (m.id === localStreamingMsgId ? { ...m, content: finalReply } : m))
+        );
+      } catch {
+        // ignore: 对账失败不影响主链路
+      }
+    },
+    [chatApi]
+  );
+
+  const runStreamTeardown = useCallback(
+    (msgId: string | null, fullText: string) => {
+      cancelTypewriter();
+      pendingStreamEndRef.current = false;
+      if (msgId && fullText) {
+        setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: fullText } : m)));
+      }
+      streamAccumRef.current = { msgId: null, text: '' };
+      typewriterRevealLenRef.current = 0;
+      streamSessionIdRef.current = null;
+      setStreamingAssistantId(null);
+      streamActiveRef.current = false;
+      setStreamActive(false);
+      streamAbortRef.current = null;
+      setIsLoading(false);
+      setLoadingConversationId(undefined);
+      const cid = conversationIdRef.current;
+      if (cid != null && msgId) {
+        void reconcileStreamingMessageFromServer(cid, msgId);
+      }
+    },
+    [cancelTypewriter, reconcileStreamingMessageFromServer]
+  );
+
+  const scheduleTypewriterTick = useCallback(() => {
+    if (typewriterRafRef.current != null) return;
+    const TYPEWRITER_MAX_STEP = 8;
+    const tick = () => {
+      typewriterRafRef.current = null;
+      const { msgId, text: full } = streamAccumRef.current;
+      if (!msgId) return;
+
+      let revealed = typewriterRevealLenRef.current;
+      const target = full.length;
+      const backlog = target - revealed;
+      if (backlog > 0) {
+        const step =
+          backlog > 200 ? TYPEWRITER_MAX_STEP : backlog > 80 ? 4 : backlog > 25 ? 2 : 1;
+        revealed = Math.min(revealed + step, target);
+        typewriterRevealLenRef.current = revealed;
+        const slice = full.slice(0, revealed);
+        setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: slice } : m)));
+      }
+
+      if (revealed < target) {
+        typewriterRafRef.current = requestAnimationFrame(tick);
+      } else if (pendingStreamEndRef.current) {
+        runStreamTeardown(msgId, full);
+      }
+    };
+    typewriterRafRef.current = requestAnimationFrame(tick);
+  }, [runStreamTeardown]);
+
+  const flushStreamContent = useCallback(() => {
+    streamFlushRafRef.current = null;
+    scheduleTypewriterTick();
+  }, [scheduleTypewriterTick]);
+
+  const scheduleStreamFlush = useCallback(() => {
+    if (streamFlushRafRef.current != null) return;
+    streamFlushRafRef.current = requestAnimationFrame(() => {
+      flushStreamContent();
+    });
+  }, [flushStreamContent]);
+
   const handleSendMessage = async () => {
     if (streamActiveRef.current) return;
 
@@ -469,7 +596,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
         messageText,
         conversationId,
         {
-        onMeta: ({ conversation_id }) => {
+        onMeta: ({ conversation_id, session_id }) => {
+          streamSessionIdRef.current = session_id;
           if (conversationIdRef.current === startConversationId) {
             setConversationId(conversation_id);
             setLoadingConversationId(conversation_id);
@@ -481,20 +609,22 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
             const id = `ai-${Date.now()}`;
             streamingMsgId = id;
             streamAccumRef.current = { msgId: id, text };
+            typewriterRevealLenRef.current = 0;
             setStreamingAssistantId(id);
             setIsLoading(false);
             setMessages(prev => [
               ...prev,
               {
                 id,
-                content: text,
+                content: '',
                 isUser: false,
                 timestamp: new Date().toLocaleTimeString(),
               },
             ]);
+            scheduleTypewriterTick();
             return;
           }
-          streamAccumRef.current.text += text;
+          streamAccumRef.current.text = mergeStreamingDelta(streamAccumRef.current.text, text);
           scheduleStreamFlush();
         },
         onError: errText => {
@@ -516,15 +646,19 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
               },
             ]);
           } else {
-            streamAccumRef.current.text += line;
-            setMessages(prev =>
-              prev.map(m =>
-                m.id === streamingMsgId ? { ...m, content: streamAccumRef.current.text } : m
-              )
-            );
+            streamAccumRef.current.text = mergeStreamingDelta(streamAccumRef.current.text, line);
+            scheduleStreamFlush();
           }
         },
         onDone: () => {
+          if (conversationIdRef.current === startConversationId) {
+            if (streamFlushRafRef.current != null) {
+              cancelAnimationFrame(streamFlushRafRef.current);
+              streamFlushRafRef.current = null;
+            }
+            pendingStreamEndRef.current = true;
+            scheduleTypewriterTick();
+          }
           void loadConversations();
         },
       },
@@ -569,11 +703,20 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
               },
             ]);
           } else {
+            cancelTypewriter();
+            pendingStreamEndRef.current = false;
+            const acc = streamAccumRef.current.text;
+            const combined = acc ? `${acc}\n\n${tail}` : tail;
+            streamAccumRef.current = { msgId: null, text: '' };
+            typewriterRevealLenRef.current = 0;
             setMessages(prev =>
               prev.map(m =>
-                m.id === streamingMsgId ? { ...m, content: `${m.content}\n\n${tail}` } : m
+                m.id === streamingMsgId ? { ...m, content: combined } : m
               )
             );
+            setStreamingAssistantId(null);
+            streamActiveRef.current = false;
+            setStreamActive(false);
           }
         }
         return;
@@ -601,25 +744,45 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
           },
         ]);
       } else {
+        cancelTypewriter();
+        pendingStreamEndRef.current = false;
+        const acc = streamAccumRef.current.text;
+        const combined = acc || errorMessage;
+        streamAccumRef.current = { msgId: null, text: '' };
+        typewriterRevealLenRef.current = 0;
         setMessages(prev =>
           prev.map(m =>
-            m.id === streamingMsgId ? { ...m, content: m.content || errorMessage } : m
+            m.id === streamingMsgId ? { ...m, content: combined } : m
           )
         );
+        setStreamingAssistantId(null);
+        streamActiveRef.current = false;
+        setStreamActive(false);
       }
     } finally {
       if (streamFlushRafRef.current != null) {
         cancelAnimationFrame(streamFlushRafRef.current);
         streamFlushRafRef.current = null;
       }
-      flushStreamContent();
-      streamAccumRef.current = { msgId: null, text: '' };
-      setStreamingAssistantId(null);
-      streamActiveRef.current = false;
-      setStreamActive(false);
       streamAbortRef.current = null;
       setIsLoading(false);
       setLoadingConversationId(undefined);
+
+      if (pendingStreamEndRef.current) {
+        scheduleTypewriterTick();
+      } else {
+        cancelTypewriter();
+        const { msgId, text } = streamAccumRef.current;
+        if (msgId && text) {
+          setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: text } : m)));
+        }
+        streamAccumRef.current = { msgId: null, text: '' };
+        typewriterRevealLenRef.current = 0;
+        streamSessionIdRef.current = null;
+        setStreamingAssistantId(null);
+        streamActiveRef.current = false;
+        setStreamActive(false);
+      }
     }
   };
 
@@ -644,6 +807,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
         inputMessage={inputMessage}
         isLoading={showLoading}
         messagesEndRef={messagesEndRef}
+        messagesContainerRef={messagesContainerRef}
         onInputChange={(e) => setInputMessage(e.target.value)}
         onKeyDown={handleKeyDown}
         onSendMessage={handleSendMessage}

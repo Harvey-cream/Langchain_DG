@@ -29,7 +29,61 @@ function stripRepeatedReactAfterFinal(body: string): string {
   return tail;
 }
 
-export function formatAssistantDisplayText(raw: string): string {
+function normalizeFenceHeaderAndBody(line: string): string {
+  const m = line.match(/^(\s*```)([a-zA-Z0-9_+-]{1,20})(.+)$/);
+  if (!m) return line;
+  const [, ticks, lang, rest] = m;
+  // 处理「```javapublic class ...」这类流式粘连：
+  // 把首行切成 fence header + 代码首行，避免语言名与代码挤在同一行导致解析异常。
+  return `${ticks}${lang}\n${rest.trimStart()}`;
+}
+
+function insertStreamingBoundaries(text: string): string {
+  let out = text;
+  // 行内出现 ``` 时，尽量断到新行，避免围栏被前文吞并。
+  out = out.replace(/([^\n])```/g, '$1\n```');
+  // 列表/标题若粘在句末，断行提升实时解析稳定性。
+  out = out.replace(/([。！？:：])\s*(#{1,6}\s+)/g, '$1\n$2');
+  out = out.replace(/([。！？:：])\s*((?:[-*+]\s+|\d+\.\s+))/g, '$1\n$2');
+  // 常见流式粘连：pythonfrom / javapublic 等，先拆成两段。
+  out = out.replace(
+    /\b(java|python|javascript|typescript|go|rust|bash|sql)(?=(from|import|class|public|def|const|let|var)\b)/gi,
+    '$1\n'
+  );
+  return out;
+}
+
+function repairStreamingMarkdown(text: string): string {
+  let out = text.replace(/\r\n/g, '\n');
+  out = insertStreamingBoundaries(out);
+  const lines = out.split('\n');
+  const fixedLines: string[] = [];
+  let inFence = false;
+
+  for (const rawLine of lines) {
+    const line = normalizeFenceHeaderAndBody(rawLine);
+    const trimmed = line.trimStart();
+    if (/^```/.test(trimmed)) {
+      inFence = !inFence;
+    }
+    fixedLines.push(line);
+  }
+
+  out = fixedLines.join('\n');
+
+  // 流式尾部代码块未闭合时，主动补闭合，保证“过程中”也能按代码块渲染。
+  if (inFence) out += '\n```';
+
+  // 流式截断时常见「未闭合 **」：补齐后让加粗结构可被解析。
+  const boldCount = (out.match(/\*\*/g) || []).length;
+  if (boldCount % 2 === 1) out += '**';
+  return out;
+}
+
+export function formatAssistantDisplayText(
+  raw: string,
+  options?: { streaming?: boolean }
+): string {
   const s = (raw || '').trim();
   if (!s) return '';
 
@@ -37,14 +91,16 @@ export function formatAssistantDisplayText(raw: string): string {
   if (afterMarker && afterMarker.index !== undefined) {
     let body = s.slice(afterMarker.index + afterMarker[0].length);
     body = stripDuplicateFinalAnswerLabels(stripRepeatedReactAfterFinal(body));
-    return normalizeChatWhitespace(body);
+    const normalized = normalizeChatWhitespace(body);
+    return options?.streaming ? repairStreamingMarkdown(normalized) : normalized;
   }
 
   const startFinal = s.match(FINAL_ANSWER_START);
   if (startFinal && startFinal.index === 0) {
     let body = s.slice(startFinal[0].length);
     body = stripDuplicateFinalAnswerLabels(stripRepeatedReactAfterFinal(body));
-    return normalizeChatWhitespace(body);
+    const normalized = normalizeChatWhitespace(body);
+    return options?.streaming ? repairStreamingMarkdown(normalized) : normalized;
   }
 
   // 仍含 ReAct 痕迹则宁可空白，也不要把 Thought/Action/Observation 整段展示
@@ -52,7 +108,8 @@ export function formatAssistantDisplayText(raw: string): string {
     return '';
   }
 
-  return normalizeChatWhitespace(s);
+  const normalized = normalizeChatWhitespace(s);
+  return options?.streaming ? repairStreamingMarkdown(normalized) : normalized;
 }
 
 export function normalizeChatWhitespace(text: string): string {

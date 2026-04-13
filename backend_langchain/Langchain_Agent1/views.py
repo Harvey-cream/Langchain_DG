@@ -12,8 +12,11 @@ from common.SSE import (
     _sse_bytes,
     _user_visible_reply,
 )
-from common.agent import chat as agent_chat, invoke_agent_with_stream_callbacks
-from common.LLM.config import get_qwen_chat_model
+from common.agent import (
+    chat_interview,
+    invoke_interview_agent_with_stream_callbacks,
+)
+from config.config import get_qwen_chat_model
 from common_web.response_web import HttpResult
 from common_web.utils import format_datetime
 from django.db import close_old_connections
@@ -79,6 +82,9 @@ class InterviewChatView(APIView):
         conversation_id = request.query_params.get("conversation_id")
 
         if conversation_id:
+            conv = InterviewConversation.objects.filter(user=user, id=conversation_id).first()
+            if not conv:
+                return HttpResult.fail("会话不存在")
             sessions = (
                 InterviewSession.objects.filter(user=user, conversation_id=conversation_id)
                 .order_by("created_at")
@@ -150,7 +156,7 @@ class InterviewChatView(APIView):
                 ai_response="",
             )
             try:
-                reply = agent_chat(message)
+                reply = chat_interview(message)
             except Exception as e:  # noqa: BLE001
                 tb = traceback.format_exc()
                 detail = f"{str(e)}\n\n--- traceback ---\n{tb}"
@@ -216,14 +222,14 @@ class InterviewChatStreamView(APIView):
             def run_agent() -> None:
                 close_old_connections()
                 try:
-                    from Langchain_Agent.tools import warmup_rag_singletons
+                    from Langchain_Agent1.tools import warmup_interview_rag_singletons
 
-                    warmup_rag_singletons()
+                    warmup_interview_rag_singletons()
                 except Exception:
-                    logger.exception("interview_chat_stream: warmup_rag_singletons failed")
+                    logger.exception("interview_chat_stream: warmup_interview_rag_singletons failed")
                 handler = _FinalAnswerOnlyTokenHandler(token_q)
                 try:
-                    reply = invoke_agent_with_stream_callbacks(msg_text, [handler])
+                    reply = invoke_interview_agent_with_stream_callbacks(msg_text, [handler])
                     result_q.put(("ok", reply))
                 except Exception as e:  # noqa: BLE001
                     result_q.put(("err", (e, traceback.format_exc())))
