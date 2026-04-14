@@ -30,7 +30,7 @@ COPY backend_langchain/ /app/
 
 RUN mkdir -p /app/common/data
 
-COPY deploy/docker-entrypoint.sh /docker-entrypoint.sh
+# COPY deploy/docker-entrypoint.sh /docker-entrypoint.sh
 # Windows 检出 CRLF 时避免 /bin/sh^M 无法执行
 RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
