@@ -1,0 +1,83 @@
+version: "3"
+
+# Lanchain_DG：MySQL(db) + Redis + Django(backend) + Nginx（官方镜像 + 挂载 ./nginx）
+# 先构建前端：cd frontend_langchain && npm ci && npm run build
+# docker compose up -d --build
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: lanchain_mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-authentication-plugin=mysql_native_password
+    restart: always
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-langchain}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+    volumes:
+      # 可改为宿主机目录，例如：/wwwroot/lanchain/mysql_data:/var/lib/mysql
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "${MYSQL_PUBLISH_PORT:-3307}:3306"
+    networks:
+      - shared_network
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 25
+      start_period: 40s
+
+  redis:
+    image: redis:7.0-alpine
+    container_name: lanchain_redis
+    restart: always
+    ports:
+      - "${REDIS_PUBLISH_PORT:-6379}:6379"
+    networks:
+      - shared_network
+
+  backend:
+    container_name: lanchain_backend
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # MySQL / Django / Gunicorn / LLM 默认走 env/settings_pro.yaml；要覆盖再加环境变量或改 yaml
+    environment:
+      - DJANGO_ENV=${DJANGO_ENV:-production}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - langgraph_data:/app/common/data
+    expose:
+      - "8000"
+    networks:
+      - shared_network
+    restart: always
+
+  nginx:
+    container_name: account_nginx
+    image: nginx:latest
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - ./nginx/conf/wx-sercret:/etc/nginx/wx-sercret:ro
+      - ./frontend_langchain/dist:/usr/share/nginx/html:ro
+      - ./static:/app/static:ro
+      - ./media:/app/media:ro
+    ports:
+      - "80:80"
+      # 有证书后再加 "443:443"，并在 nginx/nginx.conf 取消 HTTPS 段注释
+    depends_on:
+      - backend
+    networks:
+      - shared_network
+    restart: always
+
+networks:
+  shared_network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  langgraph_data:

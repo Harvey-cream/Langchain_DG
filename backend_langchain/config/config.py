@@ -13,25 +13,14 @@ from langchain_core.callbacks import (
 )
 from langchain_core.messages import BaseMessage
 
-# from langchain_community.chat_models import ChatOllama
-# from langchain_community.chat_models import ChatTongyi
-
 load_dotenv()
 
-# # ---------- 阿里云 DashScope 千问（备用）----------
-# # DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
-# # QWEN_MODEL = os.getenv("QWEN_MODEL", "qwen-math-turbo")
-# # ---------------------------------------------------------------------------
-
-# # ---------- 本地 Ollama（备用）----------
-# # OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
-# # OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-# # ---------------------------------------------------------------------------
-
-# OpenAI 兼容网关；base_url 需含 /v1（与官方 OpenAI 客户端约定一致）
-LLM_AGENT_BASE_URL = os.getenv("LLM_AGENT_BASE_URL", "https://gpt-agent.cc/v1")
-LLM_AGENT_API_KEY = os.getenv("LLM_AGENT_API_KEY", "sk-dpsaFmP9J9PHpe75yyJdvQ1xkgmfIF1oPru31peFWuzPrZ6B")
-LLM_AGENT_MODEL = os.getenv("LLM_AGENT_MODEL", "gpt-5.4")
+# 本地与线上同一套：只认 LLM_AGENT_*。未设置环境变量时用下列默认值（私有仓库可接受）；
+# 若设置了 LLM_AGENT_* / .env / yaml apply_llm_env，则优先用环境变量。
+# base_url 需含 /v1。
+LLM_AGENT_BASE_URL = os.getenv("LLM_AGENT_BASE_URL", "https://gpt-agent.cc/v1").strip()
+LLM_AGENT_API_KEY = os.getenv("LLM_AGENT_API_KEY", "sk-dpsaFmP9J9PHpe75yyJdvQ1xkgmfIF1oPru31peFWuzPrZ6B").strip()
+LLM_AGENT_MODEL = os.getenv("LLM_AGENT_MODEL", "gpt-5.4").strip()
 
 
 class _AgentStreamChatOpenAI(ChatOpenAI):
@@ -125,19 +114,3 @@ if __name__ == "__main__":
     response = llm.invoke([HumanMessage(content="你在干什么呀，你会做什么？")])
     # print(response)
     print(getattr(response, "content", response))
-
-# 原 DashScope 千问（取消注释并改 get_qwen_chat_model 的 return）：
-# return ChatTongyi(
-#     model=QWEN_MODEL,
-#     dashscope_api_key=DASHSCOPE_API_KEY,
-#     temperature=temperature,
-#     streaming=streaming,
-# )
-
-# 原 Ollama：
-# return ChatOllama(
-#     model=OLLAMA_MODEL,
-#     base_url=OLLAMA_BASE_URL,
-#     temperature=temperature,
-#     streaming=streaming,
-# )

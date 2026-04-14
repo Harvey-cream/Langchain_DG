@@ -10,22 +10,56 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
+
+from env.provider import settings_conf
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+_S = settings_conf()
+_S.apply_llm_env()
+
+
+def _cfg_get(path: str, default=None):
+    return _S.cfg_get(path, default)
+
+
+def _env_first(env_name: str, yaml_path: str, default=None):
+    v = os.environ.get(env_name)
+    if v is not None and str(v).strip() != "":
+        return v
+    got = _cfg_get(yaml_path)
+    return default if got is None else got
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-$fnhz32w$lylbzr0s7hts%zvru#ei#8!)097f5m*l+#*(z9qh0'
+SECRET_KEY = _env_first(
+    "DJANGO_SECRET_KEY",
+    "django.secret_key",
+    "django-insecure-$fnhz32w$lylbzr0s7hts%zvru#ei#8!)097f5m*l+#*(z9qh0",
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+if os.environ.get("DJANGO_DEBUG") is not None:
+    DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() in ("1", "true", "yes")
+else:
+    _dbg = _cfg_get("django.debug")
+    DEBUG = True if _dbg is None else bool(_dbg)
 
-ALLOWED_HOSTS = []
+_allowed = os.environ.get("DJANGO_ALLOWED_HOSTS", "").strip()
+if _allowed:
+    ALLOWED_HOSTS = [h.strip() for h in _allowed.split(",") if h.strip()]
+else:
+    _hosts = _cfg_get("django.allowed_hosts")
+    if isinstance(_hosts, list):
+        ALLOWED_HOSTS = [str(h).strip() for h in _hosts if str(h).strip()]
+    else:
+        ALLOWED_HOSTS = []
 
 
 # Application definition
@@ -93,11 +127,11 @@ WSGI_APPLICATION = 'backend_langchain.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'langchain',
-        'USER': 'root',
-        'PASSWORD': 'root',
-        'HOST': 'localhost',
-        'PORT': '3306',
+        'NAME': _env_first('MYSQL_DATABASE', 'mysql.database', 'langchain'),
+        'USER': _env_first('MYSQL_USER', 'mysql.user', 'root'),
+        'PASSWORD': _env_first('MYSQL_PASSWORD', 'mysql.password', 'root'),
+        'HOST': _env_first('MYSQL_HOST', 'mysql.host', 'localhost'),
+        'PORT': str(_env_first('MYSQL_PORT', 'mysql.port', '3306')),
         'OPTIONS': {
             'charset': 'utf8mb4',
         },

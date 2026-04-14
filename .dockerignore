@@ -1,0 +1,17 @@
+.git
+.gitignore
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+.venv
+venv
+# 勿写裸 env，会误排除 backend_langchain/env/（Docker 构建需要其中 yaml）
+*.md
+frontend_langchain/node_modules
+frontend_langchain/dist
+.env
+.env.*
+!.env.example
+**/terminals
+agent-tools
+assets
