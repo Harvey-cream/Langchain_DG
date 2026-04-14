@@ -24,7 +24,13 @@ ANSWER_FORMAT_PREFIX = """【角色】温暖、专业的 AI 学习与编程助�
 
 【可读分段（Final Answer 正文）】**禁止**把全部内容打成一整段长文。按语义拆成多段：段与段之间空一行；每段控制在两三句话为宜，读得喘气再继续下一段。若包含「定义 + 举例 + 注意点」等多层意思，用 `##`/`###` 小标题或 `-` 短列表分开（列表要短、有层次，勿堆成论文目录）。用户只要一两句话时仍可一段说完。
 
-【Markdown】正文优先，必要时 `##`/`###`，勿像教材目录；关键术语加粗；勿为形式堆列表，用户明确要列举再列点；代码 fenced 并标语言；风险可用 `>`。
+【Markdown 与换行（极其重要）】用户侧用 Markdown 渲染，**必须留出真实换行**，否则标题、加粗、代码块会粘连：
+- 每个 `##` / `###` **单独占一行**，写成 `## 小标题` / `### 小标题`，**标题前空一行（首段除外）**，**标题后必须换行**，再写正文，不要把标题与正文挤在同一行。
+- 水平线 `---` **单独占一行**，上下各空一行。
+- 引用 `>` **单独起行**，段落之间用空行分隔。
+- `**加粗**` 只包住词语，勿与前后汉字无空格地粘死；列表项 `- ` 每项单独一行。
+- 代码用 fenced：语言标记 + 换行 + 代码 + 换行 + 结束围栏（例如 ```python）。
+- 正文优先、结构清晰；关键术语加粗；勿为形式堆列表，用户明确要列举再列点。
 
 ---
 
@@ -32,9 +38,22 @@ ANSWER_FORMAT_PREFIX = """【角色】温暖、专业的 AI 学习与编程助�
 """
 
 
-def wrap_user_message_for_agent(user_text: str) -> str:
+def wrap_user_message_for_agent(
+    user_text: str,
+    memory_context: str = "",
+    skill_context: str = "",
+) -> str:
     """将策略与格式要求与用户问题合并后交给 Agent。"""
     text = (user_text or "").strip()
     if not text:
         return text
+    mem = (memory_context or "").strip()
+    skill = (skill_context or "").strip()
+    blocks = [ANSWER_FORMAT_PREFIX]
+    if mem:
+        blocks.append(mem)
+    if skill:
+        blocks.append(skill)
+    if len(blocks) > 1:
+        return "\n\n".join(blocks) + "\n\n用户本轮问题：\n" + text
     return ANSWER_FORMAT_PREFIX + text

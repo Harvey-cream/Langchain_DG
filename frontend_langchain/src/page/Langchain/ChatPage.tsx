@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Modal, message } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
@@ -283,12 +283,25 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
   const streamFlushRafRef = useRef<number | null>(null);
   const typewriterRafRef = useRef<number | null>(null);
   const typewriterRevealLenRef = useRef(0);
-  /** SSE 已 done，等打字机追上全文后再关流式态、对账 */
+  /** SSE 已 stream_done（正文流结束），等打字机追上全文后再关流式态、对账 */
   const pendingStreamEndRef = useRef(false);
   const scrollRafRef = useRef<number | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const streamSessionIdRef = useRef<number | null>(null);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const activeConversationStorageKey = `chat.activeConversationId:${pathname}`;
+
+  const persistActiveConversationId = useCallback(
+    (id: number | undefined) => {
+      if (id == null) {
+        localStorage.removeItem(activeConversationStorageKey);
+        return;
+      }
+      localStorage.setItem(activeConversationStorageKey, String(id));
+    },
+    [activeConversationStorageKey]
+  );
 
   const cancelTypewriter = useCallback(() => {
     if (typewriterRafRef.current != null) {
@@ -318,11 +331,13 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     });
   }, [navigate]);
 
-  const loadConversations = useCallback(async () => {
+  const loadConversations = useCallback(async (): Promise<ConversationItem[]> => {
     const response = await chatApi.getConversations();
-    if (response?.success && response?.data?.conversations) {
-      setConversations(response.data.conversations);
-    }
+    const items = response?.success && response?.data?.conversations
+      ? response.data.conversations
+      : [];
+    setConversations(items);
+    return items;
   }, [chatApi]);
 
   const handleRenameConversation = useCallback(
@@ -354,11 +369,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
         setIsLoading(false);
         setLoadingConversationId(undefined);
         setConversationId(undefined);
+        persistActiveConversationId(undefined);
         setMessages([welcomeMessage]);
       }
       await loadConversations();
     },
-    [chatApi, loadConversations, conversationId, welcomeMessage, cancelTypewriter]
+    [chatApi, loadConversations, conversationId, welcomeMessage, cancelTypewriter, persistActiveConversationId]
   );
 
   const handlePinConversation = useCallback(
@@ -381,8 +397,17 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       return;
     }
 
-    void loadConversations();
     void (async () => {
+      const items = await loadConversations();
+      const raw = localStorage.getItem(activeConversationStorageKey);
+      const restoredId = raw ? Number(raw) : NaN;
+      const canRestore = Number.isInteger(restoredId) && items.some(c => c.id === restoredId);
+      if (canRestore) {
+        await handleSelectConversation(restoredId);
+      } else {
+        persistActiveConversationId(undefined);
+      }
+
       try {
         const res = await getUserInfo();
         if (res?.success && res?.data?.display_tag) {
@@ -392,7 +417,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
         /* ignore */
       }
     })();
-  }, [handleForceLogout, loadConversations]);
+  }, [handleForceLogout, loadConversations, activeConversationStorageKey, persistActiveConversationId]);
 
   const updateStickToBottom = useCallback(() => {
     const el = messagesContainerRef.current;
@@ -420,7 +445,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null;
       messagesEndRef.current?.scrollIntoView({
-        behavior: streamActive ? 'auto' : 'smooth',
+        behavior: 'auto',
         block: 'end',
       });
     });
@@ -464,6 +489,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       });
 
       setConversationId(selectedConversationId);
+      persistActiveConversationId(selectedConversationId);
       setMessages(mapped.length ? mapped : [welcomeMessage]);
     } catch {
       return;
@@ -472,6 +498,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
 
   const handleCreateConversation = () => {
     setConversationId(undefined);
+    persistActiveConversationId(undefined);
     setMessages([welcomeMessage]);
   };
 
@@ -600,6 +627,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
           streamSessionIdRef.current = session_id;
           if (conversationIdRef.current === startConversationId) {
             setConversationId(conversation_id);
+            persistActiveConversationId(conversation_id);
             setLoadingConversationId(conversation_id);
           }
         },
@@ -650,16 +678,19 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
             scheduleStreamFlush();
           }
         },
+        onStreamDone: () => {
+          if (conversationIdRef.current !== startConversationId) return;
+          if (streamFlushRafRef.current != null) {
+            cancelAnimationFrame(streamFlushRafRef.current);
+            streamFlushRafRef.current = null;
+          }
+          pendingStreamEndRef.current = true;
+          scheduleTypewriterTick();
+        },
         onDone: () => {
           if (conversationIdRef.current === startConversationId) {
-            if (streamFlushRafRef.current != null) {
-              cancelAnimationFrame(streamFlushRafRef.current);
-              streamFlushRafRef.current = null;
-            }
-            pendingStreamEndRef.current = true;
-            scheduleTypewriterTick();
+            void loadConversations();
           }
-          void loadConversations();
         },
       },
         { signal: abortController.signal }

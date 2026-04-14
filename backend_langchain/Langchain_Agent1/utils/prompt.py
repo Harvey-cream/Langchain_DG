@@ -42,8 +42,21 @@ INTERVIEW_ANSWER_FORMAT_PREFIX = """【角色】编程类面试陪练：像靠�
 """
 
 
-def wrap_interview_user_message(user_text: str) -> str:
+def wrap_interview_user_message(
+    user_text: str,
+    memory_context: str = "",
+    skill_context: str = "",
+) -> str:
     text = (user_text or "").strip()
     if not text:
         return text
+    mem = (memory_context or "").strip()
+    skill = (skill_context or "").strip()
+    blocks = [INTERVIEW_ANSWER_FORMAT_PREFIX]
+    if mem:
+        blocks.append(mem)
+    if skill:
+        blocks.append(skill)
+    if len(blocks) > 1:
+        return "\n\n".join(blocks) + "\n\n用户本轮问题：\n" + text
     return INTERVIEW_ANSWER_FORMAT_PREFIX + text

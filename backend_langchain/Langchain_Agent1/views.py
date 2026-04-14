@@ -14,6 +14,7 @@ from common.SSE import (
 )
 from common.agent import (
     chat_interview,
+    interview_checkpoint_thread_id,
     invoke_interview_agent_with_stream_callbacks,
 )
 from config.config import get_qwen_chat_model
@@ -29,7 +30,6 @@ from rest_framework.views import APIView
 
 from User.models import InterviewConversation, InterviewSession
 from User.utils.user_utils import get_current_user
-
 logger = logging.getLogger(__name__)
 
 _MAX_ERROR_DETAIL_LEN = 8000
@@ -149,6 +149,8 @@ class InterviewChatView(APIView):
                     title=title,
                 )
 
+            thread_id = interview_checkpoint_thread_id(user.pk, conversation.id)
+
             session_obj = InterviewSession.objects.create(
                 user=user,
                 conversation=conversation,
@@ -156,7 +158,7 @@ class InterviewChatView(APIView):
                 ai_response="",
             )
             try:
-                reply = chat_interview(message)
+                reply = chat_interview(message, thread_id=thread_id)
             except Exception as e:  # noqa: BLE001
                 tb = traceback.format_exc()
                 detail = f"{str(e)}\n\n--- traceback ---\n{tb}"
@@ -208,6 +210,8 @@ class InterviewChatStreamView(APIView):
             title = _polish_interview_title(msg_text)
             conversation = InterviewConversation.objects.create(user=user, title=title)
 
+        thread_id = interview_checkpoint_thread_id(user.pk, conversation.id)
+
         session_obj = InterviewSession.objects.create(
             user=user,
             conversation=conversation,
@@ -229,7 +233,11 @@ class InterviewChatStreamView(APIView):
                     logger.exception("interview_chat_stream: warmup_interview_rag_singletons failed")
                 handler = _FinalAnswerOnlyTokenHandler(token_q)
                 try:
-                    reply = invoke_interview_agent_with_stream_callbacks(msg_text, [handler])
+                    reply = invoke_interview_agent_with_stream_callbacks(
+                        msg_text,
+                        [handler],
+                        thread_id=thread_id,
+                    )
                     result_q.put(("ok", reply))
                 except Exception as e:  # noqa: BLE001
                     result_q.put(("err", (e, traceback.format_exc())))
@@ -265,9 +273,12 @@ class InterviewChatStreamView(APIView):
                 tokens_received += 1
                 yield _sse_bytes({"type": "delta", "text": item})
 
-            if got_token_end:
-                yield _sse_bytes({"type": "done"})
+            stream_done_sent = False
+            if got_token_end and tokens_received:
+                yield _sse_bytes({"type": "stream_done"})
+                stream_done_sent = True
 
+            # 须先 join + 落库，再发 done：若先发 done，客户端断开可能中止生成器，save() 来不及执行。
             worker.join(timeout=120.0)
 
             try:
@@ -278,9 +289,14 @@ class InterviewChatStreamView(APIView):
                 conversation.save()
                 if not got_token_end:
                     yield _sse_bytes({"type": "error", "message": "智能体未返回结果"})
-                    yield _sse_bytes({"type": "done"})
+                elif tokens_received:
+                    logger.warning(
+                        "interview_chat_stream: result_q empty after worker ended but deltas were sent; "
+                        "check worker timeout or thread errors"
+                    )
                 else:
-                    logger.error("interview_chat_stream: result_q empty after worker join (client may have closed)")
+                    logger.error("interview_chat_stream: result_q empty after worker join")
+                yield _sse_bytes({"type": "done"})
                 return
 
             if kind == "err":
@@ -293,11 +309,11 @@ class InterviewChatStreamView(APIView):
                 conversation.save()
                 if not got_token_end:
                     yield _sse_bytes({"type": "error", "message": str(err)})
-                    yield _sse_bytes({"type": "done"})
                 else:
                     logger.error(
                         "interview_chat_stream: agent invoke failed after stream ended: %s", err, exc_info=True
                     )
+                yield _sse_bytes({"type": "done"})
                 return
 
             reply = str(payload)
@@ -310,9 +326,10 @@ class InterviewChatStreamView(APIView):
                 for i in range(0, len(stored), self._FALLBACK_DELTA_CHARS):
                     chunk = stored[i : i + self._FALLBACK_DELTA_CHARS]
                     yield _sse_bytes({"type": "delta", "text": chunk})
+                if got_token_end and not stream_done_sent:
+                    yield _sse_bytes({"type": "stream_done"})
 
-            if not got_token_end:
-                yield _sse_bytes({"type": "done"})
+            yield _sse_bytes({"type": "done"})
 
         resp = StreamingHttpResponse(gen(), content_type="text/event-stream; charset=utf-8")
         resp["Cache-Control"] = "no-cache, no-transform"

@@ -128,6 +128,8 @@ export type ChatStreamCallbacks = {
   onMeta?: (data: StreamMeta) => void;
   onDelta?: (text: string) => void;
   onPing?: () => void;
+  /** 正文 token 流结束（先于 done，不等落库）；用于尽快退出流式 UI */
+  onStreamDone?: () => void;
   onDone?: () => void;
   onError?: (message: string) => void;
 };
@@ -269,6 +271,8 @@ async function chatWithStreamAt(
           callbacks.onDelta?.(chunk);
         } else if (t === 'error' && data.message != null) {
           callbacks.onError?.(data.message);
+        } else if (t === 'stream_done') {
+          callbacks.onStreamDone?.();
         } else if (t === 'done') {
           if (!finished) {
             finished = true;

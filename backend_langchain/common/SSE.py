@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Optional, Any
 from uuid import UUID
@@ -106,6 +107,15 @@ def _user_visible_reply(full_agent_output: str) -> str:
 _TOKEN_STREAM_END = object()
 
 
+def _int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(value, maximum))
+
+
 class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
     """
     ReAct 每轮 LLM（Thought/Action/Observation）都会触发 on_llm_new_token；
@@ -117,6 +127,20 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
 
     # 过小易把「Final Answer」拆片误发；过大则正文会像「攒一大段才推」——体感像非流式
     _HOLDBACK = 16
+    # 单次可见增量再切片后发送（控制 delta 粗细度）
+    _DELTA_CHUNK_CHARS = _int_env(
+        "SSE_DELTA_CHUNK_CHARS",
+        164,
+        minimum=12,
+        maximum=256,
+    )
+    # 累积到该阈值才发送，避免 token 很碎时退化成单字 delta。
+    _DELTA_MIN_EMIT_CHARS = _int_env(
+        "SSE_DELTA_MIN_EMIT_CHARS",
+        64,
+        minimum=8,
+        maximum=128,
+    )
 
     def __init__(self, q: Queue) -> None:
         self._q = q
@@ -125,15 +149,55 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
         self._sent_tail_len = 0
         self._stopped = False
         self._stream_closed = False
+        self._emit_buf = ""
+
+    def _flush_emit_buffer(self, *, force: bool = False) -> None:
+        """
+        将 _emit_buf 分块推送到队列：
+        - 非 force：至少达到 _DELTA_MIN_EMIT_CHARS 才发，优先在标点/空白处断开
+        - force：收尾阶段把剩余内容全部发完
+        """
+        if not self._emit_buf:
+            return
+        split_chars = set("，。！？；：,.!?;:\n\t ")
+        while self._emit_buf:
+            if not force and len(self._emit_buf) < self._DELTA_MIN_EMIT_CHARS:
+                return
+            if len(self._emit_buf) <= self._DELTA_CHUNK_CHARS:
+                if force or len(self._emit_buf) >= self._DELTA_MIN_EMIT_CHARS:
+                    self._q.put(self._emit_buf)
+                    self._emit_buf = ""
+                return
+
+            cut = self._DELTA_CHUNK_CHARS
+            # 让切分尽量自然：在 chunk 末尾附近优先寻找标点/空白
+            for i in range(self._DELTA_CHUNK_CHARS - 1, self._DELTA_MIN_EMIT_CHARS - 1, -1):
+                if self._emit_buf[i] in split_chars:
+                    cut = i + 1
+                    break
+            chunk = self._emit_buf[:cut]
+            self._q.put(chunk)
+            self._emit_buf = self._emit_buf[cut:]
 
     def on_llm_start(self, serialized: Any, prompts: Any, *, run_id: UUID, **kwargs: Any) -> None:
-        """多轮 ReAct 每轮一次；新一轮开始须允许 holdback，否则上一轮 on_llm_end 会误伤下一轮 Final Answer 段。"""
+        """每轮 LLM 完成（含 LangGraph create_agent 多轮 tool调用）单独流式；清空缓冲，只推本轮正文。"""
         self._stream_closed = False
+        self._buf = ""
+        self._fa_end = None
+        self._sent_tail_len = 0
+        self._stopped = False
+        self._emit_buf = ""
 
     def on_llm_end(self, response: Any, **kwargs: Any) -> None:
-        """单次 LLM 生成结束：刷出 holdback 中的尾部（仅在有 Final Answer 段时才有可见 tail）。"""
+        """单次 LLM 生成结束：刷出 holdback。无 Final Answer 标记时（原生 tool calling 末轮常见）按全文可见处理。"""
         self._stream_closed = True
+        if self._fa_end is None and self._buf.strip():
+            visible = _user_visible_reply(self._buf)
+            if visible:
+                self._fa_end = 0
+                self._buf = visible
         self._flush_deltas()
+        self._flush_emit_buffer(force=True)
 
     def on_llm_new_token(self, token: str, *, run_id: UUID, **kwargs: Any) -> None:
         if self._stopped:
@@ -185,7 +249,8 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
 
         new_part = tail[self._sent_tail_len : safe_len]
         if new_part:
-            self._q.put(new_part)
+            self._emit_buf += new_part
+            self._flush_emit_buffer(force=self._stream_closed or self._stopped)
         self._sent_tail_len = safe_len
         # 已硬截断：立即通知 SSE 消费端结束 delta 等待，不必等 invoke() 收尾（否则会长时间只有 ping）
         if self._stopped:

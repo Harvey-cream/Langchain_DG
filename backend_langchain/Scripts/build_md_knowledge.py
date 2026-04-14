@@ -22,7 +22,7 @@ if str(_ROOT) not in sys.path:
 
 from dotenv import load_dotenv
 from common.hf_mirror import apply_hf_mirror_default
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma

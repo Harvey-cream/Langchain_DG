@@ -12,12 +12,21 @@ pycryptodomex==3.23.0
 sqlparse==0.5.5
 typing_extensions==4.15.0
 tzdata==2025.3
-langchain==0.1.16
-langchain-community==0.0.38
+# LangChain 1.x：create_agent（LangGraph）；community 0.4.x 与 core 1.x 配套
+langchain>=1.2.0,<2.0
+langchain-community>=0.4.1,<0.5
+langchain-text-splitters>=1.1.1,<2.0
+langchain-core>=1.2.10,<2.0
+langchain-openai>=1.1.12,<2.0
+langgraph>=1.1.5,<1.2
+langgraph-checkpoint-sqlite>=2.0.10,<3.0
+langchain-mcp-adapters>=0.2.2,<0.3
+mcp>=1.9.2,<2
+langsmith>=0.1.17
 chromadb==0.4.24
 beautifulsoup4==4.12.3
 lxml==5.2.2
-langsmith<0.2
 python-dotenv
 dashscope>=1.19.0
+huggingface_hub>=1.10.1
 sentence-transformers>=5.3.0

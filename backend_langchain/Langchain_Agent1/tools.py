@@ -8,7 +8,7 @@ from langchain_core.tools import tool
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 
-from common.hf_mirror import apply_hf_mirror_default
+from common.embedding import get_embedding_model
 
 _COLLECTION_NAME = "md_knowledge"
 _EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
@@ -25,8 +25,6 @@ _CHROMA_INTERVIEW_SUBDIRS: tuple[str, ...] = (
     _STORE_VUE_INTERVIEW,
 )
 
-_embedding_singleton: HuggingFaceEmbeddings | None = None
-_embedding_lock = threading.Lock()
 _chroma_store_cache: dict[str, Chroma] = {}
 _chroma_lock = threading.Lock()
 
@@ -37,17 +35,7 @@ def _chroma_root() -> Path:
 
 
 def _get_embeddings() -> HuggingFaceEmbeddings:
-    global _embedding_singleton
-    if _embedding_singleton is None:
-        with _embedding_lock:
-            if _embedding_singleton is None:
-                apply_hf_mirror_default()
-                _embedding_singleton = HuggingFaceEmbeddings(
-                    model_name=_EMBEDDING_MODEL,
-                    model_kwargs={"device": "cpu"},
-                    encode_kwargs={"normalize_embeddings": True, "batch_size": 32},
-                )
-    return _embedding_singleton
+    return get_embedding_model(_EMBEDDING_MODEL, device="cpu", normalize_embeddings=True, batch_size=32)
 
 
 def _get_chroma_store(persist_subdir: str) -> Chroma | None:
@@ -68,7 +56,6 @@ def _get_chroma_store(persist_subdir: str) -> Chroma | None:
 
 def warmup_interview_rag_singletons() -> None:
     """进程内预热：嵌入 + 三套面试向量库。"""
-    apply_hf_mirror_default()
     _get_embeddings()
     for sub in _CHROMA_INTERVIEW_SUBDIRS:
         _get_chroma_store(sub)

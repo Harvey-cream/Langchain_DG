@@ -21,7 +21,11 @@ from common_web.utils import format_datetime
 from config.config import get_qwen_chat_model
 from langchain_core.messages import HumanMessage
 from django.utils import timezone
-from common.agent import chat as agent_chat, invoke_agent_with_stream_callbacks
+from common.agent import (
+    agent_checkpoint_thread_id,
+    chat as agent_chat,
+    invoke_agent_with_stream_callbacks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +153,8 @@ class ChatView(APIView):
                     title=title,
                 )
 
+            thread_id = agent_checkpoint_thread_id(user.pk, conversation.id)
+
             # 先落库用户输入
             session_obj = UserSession.objects.create(
                 user=user,
@@ -158,7 +164,7 @@ class ChatView(APIView):
             )
             # 调用智能体（ReAct + RAG）
             try:
-                reply = agent_chat(message)
+                reply = agent_chat(message, thread_id=thread_id)
             except Exception as e:  # noqa: BLE001
                 tb = traceback.format_exc()
                 detail = f"{str(e)}\n\n--- traceback ---\n{tb}"
@@ -197,6 +203,7 @@ class ChatStreamView(APIView):
     SSE 流式对话（text/event-stream）。
     - 千问 streaming=True；仅「Final Answer:」之后的 token 推给前端（Thought/Action/Observation 不推送）。
     - 推理期间若尚无 Final Answer，周期性 type=ping，避免长时间无字节被网关/浏览器断开。
+    - type=stream_done：token 队列结束即发（先于落库）；type=done：落库完成后发，用于结束拉流。
     POST /api/agent/chat/stream/  body: { message, conversation_id? }
     """
 
@@ -222,6 +229,8 @@ class ChatStreamView(APIView):
             title = _polish_conversation_title(msg_text)
             conversation = UserConversation.objects.create(user=user, title=title)
 
+        thread_id = agent_checkpoint_thread_id(user.pk, conversation.id)
+
         session_obj = UserSession.objects.create(
             user=user,
             conversation=conversation,
@@ -244,7 +253,11 @@ class ChatStreamView(APIView):
                     logger.exception("chat_stream: warmup_rag_singletons failed")
                 handler = _FinalAnswerOnlyTokenHandler(token_q)
                 try:
-                    reply = invoke_agent_with_stream_callbacks(msg_text, [handler])
+                    reply = invoke_agent_with_stream_callbacks(
+                        msg_text,
+                        [handler],
+                        thread_id=thread_id,
+                    )
                     result_q.put(("ok", reply))
                 except Exception as e:  # noqa: BLE001
                     result_q.put(("err", (e, traceback.format_exc())))
@@ -280,10 +293,12 @@ class ChatStreamView(APIView):
                 tokens_received += 1
                 yield _sse_bytes({"type": "delta", "text": item})
 
-            # 已收到队列结束符：先 done，让前端立刻结束流式态；落库仍在 worker.join 之后完成（invoke 可能仍在收尾）
-            if got_token_end:
-                yield _sse_bytes({"type": "done"})
+            stream_done_sent = False
+            if got_token_end and tokens_received:
+                yield _sse_bytes({"type": "stream_done"})
+                stream_done_sent = True
 
+            # 须先 join + 落库，再发 done：若先发 done，浏览器/前端常会立刻断开，迭代器可能被中止，save() 来不及执行。
             worker.join(timeout=120.0)
 
             try:
@@ -294,9 +309,14 @@ class ChatStreamView(APIView):
                 conversation.save()
                 if not got_token_end:
                     yield _sse_bytes({"type": "error", "message": "智能体未返回结果"})
-                    yield _sse_bytes({"type": "done"})
+                elif tokens_received:
+                    logger.warning(
+                        "chat_stream: result_q empty after worker ended but deltas were sent; "
+                        "check worker timeout or thread errors"
+                    )
                 else:
-                    logger.error("chat_stream: result_q empty after worker join (client may have closed)")
+                    logger.error("chat_stream: result_q empty after worker join")
+                yield _sse_bytes({"type": "done"})
                 return
 
             if kind == "err":
@@ -309,9 +329,9 @@ class ChatStreamView(APIView):
                 conversation.save()
                 if not got_token_end:
                     yield _sse_bytes({"type": "error", "message": str(err)})
-                    yield _sse_bytes({"type": "done"})
                 else:
                     logger.error("chat_stream: agent invoke failed after stream ended: %s", err, exc_info=True)
+                yield _sse_bytes({"type": "done"})
                 return
 
             reply = str(payload)
@@ -325,9 +345,10 @@ class ChatStreamView(APIView):
                 for i in range(0, len(stored), self._FALLBACK_DELTA_CHARS):
                     chunk = stored[i : i + self._FALLBACK_DELTA_CHARS]
                     yield _sse_bytes({"type": "delta", "text": chunk})
+                if got_token_end and not stream_done_sent:
+                    yield _sse_bytes({"type": "stream_done"})
 
-            if not got_token_end:
-                yield _sse_bytes({"type": "done"})
+            yield _sse_bytes({"type": "done"})
 
         resp = StreamingHttpResponse(gen(), content_type="text/event-stream; charset=utf-8")
         resp["Cache-Control"] = "no-cache, no-transform"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import List
 from pathlib import Path
@@ -8,7 +9,9 @@ from langchain_core.tools import tool
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 
-from common.hf_mirror import apply_hf_mirror_default
+from common.embedding import get_embedding_model
+
+logger = logging.getLogger(__name__)
 
 # 与 Scripts/build_md_knowledge.py 一致：同一 collection 名，数据按子目录隔离。
 # 检索时：Chroma(persist_directory=.../chroma_db/<子目录名>) 只读该目录下的向量集合。
@@ -31,8 +34,6 @@ _CHROMA_SUBDIRS: tuple[str, ...] = (
     _STORE_LEARNING_INTERVIEW,
 )
 
-_embedding_singleton: HuggingFaceEmbeddings | None = None
-_embedding_lock = threading.Lock()
 # 每个向量子目录只建一次 Chroma，避免每次工具调用都重新打开库与触发遥测
 _chroma_store_cache: dict[str, Chroma] = {}
 _chroma_lock = threading.Lock()
@@ -44,18 +45,8 @@ def _chroma_root() -> Path:
 
 
 def _get_embeddings() -> HuggingFaceEmbeddings:
-    """进程内单例；加锁避免启动预热线程与首请求并发时重复加载 BERT。"""
-    global _embedding_singleton
-    if _embedding_singleton is None:
-        with _embedding_lock:
-            if _embedding_singleton is None:
-                apply_hf_mirror_default()
-                _embedding_singleton = HuggingFaceEmbeddings(
-                    model_name=_EMBEDDING_MODEL,
-                    model_kwargs={"device": "cpu"},
-                    encode_kwargs={"normalize_embeddings": True, "batch_size": 32},
-                )
-    return _embedding_singleton
+    """统一从 common.embedding 获取单例模型。"""
+    return get_embedding_model(_EMBEDDING_MODEL, device="cpu", normalize_embeddings=True, batch_size=32)
 
 
 def _get_chroma_store(persist_subdir: str) -> Chroma | None:
@@ -83,10 +74,15 @@ def warmup_rag_singletons() -> None:
     注意：每次「重启后端进程」（runserver 重启、gunicorn worker 重启）都会重新加载权重，无法跨进程共享内存。
     可用环境变量 SKIP_RAG_STARTUP_WARMUP=1 跳过启动预热（测试/migrate 等）。
     """
-    apply_hf_mirror_default()
     _get_embeddings()
     for sub in _CHROMA_SUBDIRS:
         _get_chroma_store(sub)
+    try:
+        from common.mcp_multiserver import load_mcp_tools_once
+
+        load_mcp_tools_once()
+    except Exception:
+        logger.exception("warmup_rag_singletons: MCP 工具预加载失败")
 
 
 def _format_docs(docs) -> str:
@@ -167,10 +163,17 @@ def rag_learning_interview(query: str) -> str:
     return _rag_similarity_search(_STORE_LEARNING_INTERVIEW, query)
 
 
-# Agent 注册用：四套独立工具，由模型按意图选用，避免单库混检带来的噪声与延迟
+# 内置工具（知识库）；仓库/企业能力通过 MCP_SERVERS_* 配置的 MultiServer 工具注入，见 get_all_agent_tools()
 RAG_TOOLS = [
     rag_ai_programming,
     rag_openclaw,
     rag_vibe_coding,
     rag_learning_interview,
 ]
+
+
+def get_all_agent_tools() -> list:
+    """内置 RAG 工具 + MCP_SERVERS_* 配置的 MultiServer 工具（LangChain BaseTool）。"""
+    from common.mcp_multiserver import load_mcp_tools_once
+
+    return list(RAG_TOOLS) + load_mcp_tools_once()
