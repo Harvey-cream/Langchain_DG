@@ -1,7 +1,4 @@
-# CPU 版 PyTorch：须配合 --extra-index-url，否则易从默认源装上 CUDA 大包
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.2.2+cpu
-
+# torch 在 Dockerfile 中单独从 PyTorch 官方 cpu 索引安装，避免阿里云/清华默认装上 CUDA 大包（500MB+）
 asgiref==3.11.1
 cffi==2.0.0
 cryptography==46.0.6

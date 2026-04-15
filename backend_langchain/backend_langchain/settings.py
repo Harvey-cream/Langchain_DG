@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 
+from common.hf_mirror import apply_hf_mirror_default
 from env.provider import settings_conf
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -20,6 +21,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 _S = settings_conf()
 _S.apply_llm_env()
+# 尽早设置 HF 镜像（与 docker-compose 中 HF_ENDPOINT 一致；未设置时默认 hf-mirror）
+apply_hf_mirror_default()
 
 
 def _cfg_get(path: str, default=None):

@@ -42,13 +42,17 @@ services:
       context: .
       dockerfile: Dockerfile
     # MySQL / Django / Gunicorn / LLM 默认走 env/settings_pro.yaml；要覆盖再加环境变量或改 yaml
+    # HuggingFace：国内默认 hf-mirror；出访正常可设 HF_ENDPOINT=https://huggingface.co
     environment:
       - DJANGO_ENV=${DJANGO_ENV:-production}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-600}
     depends_on:
       db:
         condition: service_healthy
     volumes:
       - langgraph_data:/app/common/data
+      - huggingface_cache:/root/.cache/huggingface
     expose:
       - "8000"
     networks:
@@ -81,3 +85,4 @@ networks:
 volumes:
   mysql_data:
   langgraph_data:
+  huggingface_cache:
