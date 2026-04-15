@@ -26,10 +26,33 @@ def _is_production_embedding_env() -> bool:
 def _embedding_cache_key(model_name: str) -> str:
     if _is_production_embedding_env():
         api_model = os.environ.get(
-            "DASHSCOPE_EMBEDDING_MODEL", "text-embedding-async-v2"
+            "DASHSCOPE_EMBEDDING_MODEL", "text-embedding-v3"
         ).strip()
         return f"dashscope:{api_model}"
     return f"hf:{model_name}"
+
+
+def _dashscope_openai_compatible_embeddings(api_key: str, model: str) -> Embeddings:
+    """
+    百炼 text-embedding-v3/v4 等须走 OpenAI 兼容 embeddings接口。
+    langchain_community.DashScopeEmbeddings（旧 TextEmbedding.call + text_type）易触发
+    InvalidParameter / input.url 等与同步向量接口不匹配的错误。
+    文档：https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api
+    """
+    from langchain_openai import OpenAIEmbeddings
+
+    base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    kwargs: dict = {
+        "model": model,
+        "api_key": api_key,
+        "base_url": base,
+        "check_embedding_ctx_length": False,
+    }
+    if model in ("text-embedding-v3", "text-embedding-v4"):
+        dim = os.environ.get("DASHSCOPE_EMBEDDING_DIMENSIONS", "1024").strip()
+        if dim.isdigit():
+            kwargs["dimensions"] = int(dim)
+    return OpenAIEmbeddings(**kwargs)
 
 
 def get_embedding_model(
@@ -42,7 +65,8 @@ def get_embedding_model(
     """
     嵌入单例：仅当 DJANGO_ENV ∈ {production, pro, prod} 时用 DashScope 向量 API；其余一律 HuggingFace 本地模型。
 
-    生产环境下 ``model_name`` 仅用于缓存键分区；实际模型名由 ``DASHSCOPE_EMBEDDING_MODEL`` 决定。
+    生产环境下 ``model_name`` 仅用于缓存键分区；实际模型名由 ``DASHSCOPE_EMBEDDING_MODEL`` 决定
+    （默认 text-embedding-v3，经百炼 OpenAI 兼容 ``/v1/embeddings``；v3/v4 可配 ``DASHSCOPE_EMBEDDING_DIMENSIONS``）。
     注意：若 Chroma 库由本地模型构建，向量维度可能与 API 不一致，生产需用 API 重新建库或单独目录。
     """
     key = _embedding_cache_key(model_name)
@@ -50,18 +74,15 @@ def get_embedding_model(
         with _embedding_lock:
             if key not in _embedding_cache:
                 if _is_production_embedding_env():
-                    from langchain_community.embeddings import DashScopeEmbeddings
-
                     api_key = (
                         os.environ.get("DASHSCOPE_API_KEY", "").strip()
                         or _DEFAULT_DASHSCOPE_API_KEY
                     )
                     api_model = os.environ.get(
-                        "DASHSCOPE_EMBEDDING_MODEL", "text-embedding-async-v2"
+                        "DASHSCOPE_EMBEDDING_MODEL", "text-embedding-v3"
                     ).strip()
-                    _embedding_cache[key] = DashScopeEmbeddings(
-                        model=api_model,
-                        dashscope_api_key=api_key,
+                    _embedding_cache[key] = _dashscope_openai_compatible_embeddings(
+                        api_key, api_model
                     )
                 else:
                     apply_hf_mirror_default()
