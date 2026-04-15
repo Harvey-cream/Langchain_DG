@@ -30,9 +30,6 @@ COPY backend_langchain/ /app/
 
 RUN mkdir -p /app/common/data
 
-# COPY deploy/docker-entrypoint.sh /docker-entrypoint.sh
-# Windows 检出 CRLF 时避免 /bin/sh^M 无法执行
-RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
-
 EXPOSE 8000
-ENTRYPOINT ["/docker-entrypoint.sh"]
+# 迁移请自行执行：docker compose exec backend python manage.py migrate
+CMD ["gunicorn", "backend_langchain.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-"]
