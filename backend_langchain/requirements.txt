@@ -1,3 +1,7 @@
+# CPU 版 PyTorch：须配合 --extra-index-url，否则易从默认源装上 CUDA 大包
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu
+
 asgiref==3.11.1
 cffi==2.0.0
 cryptography==46.0.6
@@ -24,11 +28,9 @@ langgraph-checkpoint-sqlite>=2.0.10,<3.0
 langchain-mcp-adapters>=0.2.2,<0.3
 mcp>=1.9.2,<2
 langsmith>=0.1.17
+# 本地 RAG：Chroma + HuggingFace 嵌入（会拉 transformers 等，与 torch CPU 配套）
 chromadb==0.4.24
-beautifulsoup4==4.12.3
-lxml==5.2.2
 python-dotenv
 PyYAML>=6.0.1,<7.0
 dashscope>=1.19.0
-huggingface_hub>=1.10.1
-sentence-transformers>=5.3.0
+sentence-transformers>=5.3.0,<6.0

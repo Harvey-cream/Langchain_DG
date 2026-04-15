@@ -1,12 +1,13 @@
 # 后端：Django + LangChain（构建上下文为仓库根目录）
+# pip默认阿里云；apt 见下方 RUN。torch+cpu 仍走 requirements 里 PyTorch 官方 cpu 索引。
 FROM python:3.10-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     DJANGO_SETTINGS_MODULE=backend_langchain.settings \
-    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
-    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    PIP_TRUSTED_HOST="mirrors.aliyun.com download.pytorch.org"
 
 WORKDIR /app
 
