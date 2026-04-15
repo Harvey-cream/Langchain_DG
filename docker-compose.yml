@@ -69,6 +69,7 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
       - ./nginx/conf/wx-sercret:/etc/nginx/wx-sercret:ro
+      # 静态页：宿主机 ./frontend_langchain/dist → 容器 html；须先在仓库根执行 bash build_fronted.sh，否则此处为空目录
       - ./frontend_langchain/dist:/usr/share/nginx/html:ro
       - ./static:/app/static:ro
       - ./media:/app/media:ro
