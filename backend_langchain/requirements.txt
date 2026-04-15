@@ -1,4 +1,5 @@
-# torch 在 Dockerfile 中单独从 PyTorch 官方 cpu 索引安装，避免阿里云/清华默认装上 CUDA 大包（500MB+）
+# 生产 / Docker：向量走 DashScope API，不装 torch、sentence-transformers。
+# 本地要用 HuggingFace 嵌入：再装 requirements-dev.txt（并自行安装 CPU 版 torch，见该文件说明）。
 asgiref==3.11.1
 cffi==2.0.0
 cryptography==46.0.6
@@ -25,9 +26,8 @@ langgraph-checkpoint-sqlite>=2.0.10,<3.0
 langchain-mcp-adapters>=0.2.2,<0.3
 mcp>=1.9.2,<2
 langsmith>=0.1.17
-# 本地 RAG：Chroma + HuggingFace 嵌入（会拉 transformers 等，与 torch CPU 配套）
+# RAG 读本地 Chroma 目录；检索时嵌入由 API 提供（生产）或本地 HF（开发，见 requirements-dev）
 chromadb==0.4.24
 python-dotenv
 PyYAML>=6.0.1,<7.0
 dashscope>=1.19.0
-sentence-transformers>=5.3.0,<6.0

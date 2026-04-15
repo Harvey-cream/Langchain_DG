@@ -1,5 +1,5 @@
 # 后端：Django + LangChain（构建上下文为仓库根目录）
-# pip 默认阿里云；torch 必须单独从官方 cpu 索引安装，否则易被镜像站解析成 CUDA wheel。
+# 生产镜像不装 torch：向量嵌入走 DashScope API（见 common/embedding.py）。
 FROM python:3.10-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
@@ -7,21 +7,11 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     DJANGO_SETTINGS_MODULE=backend_langchain.settings \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
-    PIP_TRUSTED_HOST="mirrors.aliyun.com download.pytorch.org"
+    PIP_TRUSTED_HOST=mirrors.aliyun.com
 
 WORKDIR /app
 
-# 写死 pip 默认源为阿里云，覆盖部分基础镜像/旧层里预置的清华等 ~/.config/pip/pip.conf；
-# 仅给「pip upgrade」加 -i、后面 install 不加时，仍会走这里或 ENV。
-RUN rm -f /etc/pip.conf /root/.config/pip/pip.conf \
-    && mkdir -p /root/.config/pip \
-    && printf '%s\n' \
-      '[global]' \
-      'index-url = https://mirrors.aliyun.com/pypi/simple/' \
-      'trusted-host = mirrors.aliyun.com download.pytorch.org' \
-      > /root/.config/pip/pip.conf
-
-# Debian bookworm：国内 apt镜像（构建失败可改回官方源）
+# Debian：apt 使用阿里云（pip 由上方 ENV 的 PIP_INDEX_URL 走阿里云 PyPI）
 RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
       sed -i 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources; \
@@ -35,12 +25,8 @@ RUN set -eux; \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend_langchain/requirements.txt /app/requirements.txt
-# torch 必须用官方 cpu 索引；其余依赖走 pip.conf 中的阿里云
 RUN pip install --upgrade pip setuptools wheel \
-    && pip install "torch==2.2.2+cpu" --index-url https://download.pytorch.org/whl/cpu \
-    && pip install -r /app/requirements.txt \
-        --index-url https://mirrors.aliyun.com/pypi/simple/ \
-        --trusted-host mirrors.aliyun.com
+    && pip install -r /app/requirements.txt
 
 COPY backend_langchain/ /app/
 

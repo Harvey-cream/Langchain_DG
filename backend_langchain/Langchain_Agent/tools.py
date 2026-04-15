@@ -5,8 +5,8 @@ import threading
 from typing import List
 from pathlib import Path
 
+from langchain_core.embeddings import Embeddings
 from langchain_core.tools import tool
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 
 from common.embedding import get_embedding_model
@@ -44,7 +44,7 @@ def _chroma_root() -> Path:
     return Path(__file__).resolve().parents[2] / "backend_langchain" / "Langchain_knowledge" / "chroma_db"
 
 
-def _get_embeddings() -> HuggingFaceEmbeddings:
+def _get_embeddings() -> Embeddings:
     """统一从 common.embedding 获取单例模型。"""
     return get_embedding_model(_EMBEDDING_MODEL, device="cpu", normalize_embeddings=True, batch_size=32)
 

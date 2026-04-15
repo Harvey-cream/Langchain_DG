@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Iterable
 
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_core.embeddings import Embeddings
 
 from common.embedding import get_embedding_model
 
@@ -100,13 +100,13 @@ _EMBEDDING_MODEL = os.getenv("SKILL_ROUTER_EMBEDDING_MODEL", "BAAI/bge-small-zh-
 _ROUTER_MIN_SIM = float(os.getenv("SKILL_ROUTER_MIN_SIM", "0.32"))
 _ROUTER_DEBUG = os.getenv("SKILL_ROUTER_DEBUG", "0").strip() == "1"
 logger = logging.getLogger(__name__)
-_embedding_singleton: HuggingFaceEmbeddings | None = None
+_embedding_singleton: Embeddings | None = None
 _embedding_lock = threading.Lock()
 _skill_vec_cache: dict[str, list[float]] = {}
 _skill_vec_lock = threading.Lock()
 
 
-def _get_embeddings() -> HuggingFaceEmbeddings:
+def _get_embeddings() -> Embeddings:
     global _embedding_singleton
     if _embedding_singleton is None:
         with _embedding_lock:

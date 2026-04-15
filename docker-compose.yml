@@ -45,6 +45,9 @@ services:
     # HuggingFace：国内默认 hf-mirror；出访正常可设 HF_ENDPOINT=https://huggingface.co
     environment:
       - DJANGO_ENV=${DJANGO_ENV:-production}
+      # 生产环境向量 API（见 common/embedding.py）；密钥勿写进镜像，用 .env 注入
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - DASHSCOPE_EMBEDDING_MODEL=${DASHSCOPE_EMBEDDING_MODEL:-text-embedding-async-v2}
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
       - HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-600}
     depends_on:
