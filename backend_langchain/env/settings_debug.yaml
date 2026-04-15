@@ -1,0 +1,23 @@
+# 本地 / 开发：DJANGO_ENV=debug（默认）
+# MySQL 在宿主机或本机 Docker 时：host 用 localhost；若 Django 在容器、DB 在宿主机，可改为 host.docker.internal（Windows/Mac Docker Desktop）
+
+django:
+  secret_key: "django-insecure-$fnhz32w$lylbzr0s7hts%zvru#ei#8!)097f5m*l+#*(z9qh0"
+  debug: true
+  allowed_hosts:
+    - localhost
+    - "127.0.0.1"
+    - "[::1]"
+
+mysql:
+  host: localhost
+  port: 3306
+  database: langchain
+  user: root
+  password: root
+
+llm:
+  # 可选；也可仅用环境变量 LLM_AGENT_*（优先级：环境变量 > 本文件）
+  agent_base_url: ""
+  agent_api_key: ""
+  agent_model: ""

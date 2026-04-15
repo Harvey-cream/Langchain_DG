@@ -1,0 +1,23 @@
+# 生产：容器内设置 DJANGO_ENV=production
+# MySQL 使用 compose 服务名 db；密码务必与 compose 中 MYSQL_ROOT_PASSWORD 一致，或用环境变量 MYSQL_PASSWORD 覆盖
+
+django:
+  secret_key: "CHANGE_ME_USE_DJANGO_SECRET_KEY_ENV"
+  debug: false
+  allowed_hosts:
+    - "38.190.206.248"
+    - localhost
+    - "127.0.0.1"
+
+mysql:
+  host: db
+  port: 3306
+  database: langchain
+  user: root
+  # 与 docker-compose 中 MYSQL_ROOT_PASSWORD 保持一致；生产建议只用环境变量注入
+  password: root
+
+llm:
+  agent_base_url: ""
+  agent_api_key: ""
+  agent_model: ""

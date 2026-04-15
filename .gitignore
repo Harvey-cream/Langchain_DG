@@ -29,11 +29,11 @@ dist-ssr
 .env.development.local
 .env.test.local
 .env.production.local
-# 虚拟环境
+# 虚拟环境（勿用裸 env/，会误忽略 backend_langchain/env/ 里的 YAML 配置）
 .venv/
 venv/
-env/
-ENV/
+/env/
+/ENV/
 
 # Python 缓存
 __pycache__/
