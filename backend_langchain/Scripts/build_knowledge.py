@@ -28,7 +28,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import Chroma
 
-from common.hf_mirror import apply_hf_mirror_default
+from common.extend import apply_hf_mirror_default
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 _HTML_IMG_RE = re.compile(r"<img\s+[^>]*>", flags=re.IGNORECASE)

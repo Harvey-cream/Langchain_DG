@@ -42,8 +42,15 @@ function insertStreamingBoundaries(text: string): string {
   let out = text;
   // 行内出现 ``` 时，尽量断到新行，避免围栏被前文吞并。
   out = out.replace(/([^\n])```/g, '$1\n```');
+  // 围栏结束与标题/加粗粘在同一 token 里时（流式常见），强行断行。
+  out = out.replace(/```(#{1,6}\s)/g, '```\n\n$1');
+  out = out.replace(/```(\*\*)/g, '```\n\n$1');
   // 列表/标题若粘在句末，断行提升实时解析稳定性。
   out = out.replace(/([。！？:：])\s*(#{1,6}\s+)/g, '$1\n$2');
+  // 句末标点后紧跟 ##（无空格）
+  out = out.replace(/([。！？])(#{1,6}\s)/g, '$1\n\n$2');
+  // ATX 标题后缺空格（如 `##你可`）：CommonMark 要求 `#` 后有空格，否则不当作标题
+  out = out.replace(/(^|\n)(#{1,6})(?=[\u4e00-\u9fffA-Za-z0-9「《（])/gm, '$1$2 ');
   out = out.replace(/([。！？:：])\s*((?:[-*+]\s+|\d+\.\s+))/g, '$1\n$2');
   // 常见流式粘连：pythonfrom / javapublic 等，先拆成两段。
   out = out.replace(
@@ -53,7 +60,12 @@ function insertStreamingBoundaries(text: string): string {
   return out;
 }
 
-function repairStreamingMarkdown(text: string): string {
+/**
+ * streaming=true：不伪造结束的 ``` / **。中途补闭合会让解析器以为代码块已结束，后续 token 被当成标题/列表，
+ * 出现 ```##、碎片标题等乱渲染（与 SSE 切断无关，是「假闭合」导致的）。
+ * streaming=false：收尾阶段再补全未闭合围栏与加粗，与历史消息/落库展示一致。
+ */
+function repairStreamingMarkdown(text: string, streaming: boolean): string {
   let out = text.replace(/\r\n/g, '\n');
   out = insertStreamingBoundaries(out);
   const lines = out.split('\n');
@@ -71,19 +83,25 @@ function repairStreamingMarkdown(text: string): string {
 
   out = fixedLines.join('\n');
 
-  // 流式尾部代码块未闭合时，主动补闭合，保证“过程中”也能按代码块渲染。
-  if (inFence) out += '\n```';
+  if (inFence && !streaming) {
+    out += '\n```';
+  }
 
-  // 流式截断时常见「未闭合 **」：补齐后让加粗结构可被解析。
   const boldCount = (out.match(/\*\*/g) || []).length;
-  if (boldCount % 2 === 1) out += '**';
+  if (boldCount % 2 === 1 && !streaming) {
+    out += '**';
+  }
   return out;
 }
 
+/**
+ * 流式与结束后同一套清洗入口；streaming 控制是否对「未闭合」结构做假补全。
+ */
 export function formatAssistantDisplayText(
   raw: string,
   options?: { streaming?: boolean }
 ): string {
+  const streaming = Boolean(options?.streaming);
   const s = (raw || '').trim();
   if (!s) return '';
 
@@ -92,7 +110,7 @@ export function formatAssistantDisplayText(
     let body = s.slice(afterMarker.index + afterMarker[0].length);
     body = stripDuplicateFinalAnswerLabels(stripRepeatedReactAfterFinal(body));
     const normalized = normalizeChatWhitespace(body);
-    return options?.streaming ? repairStreamingMarkdown(normalized) : normalized;
+    return repairStreamingMarkdown(normalized, streaming);
   }
 
   const startFinal = s.match(FINAL_ANSWER_START);
@@ -100,7 +118,7 @@ export function formatAssistantDisplayText(
     let body = s.slice(startFinal[0].length);
     body = stripDuplicateFinalAnswerLabels(stripRepeatedReactAfterFinal(body));
     const normalized = normalizeChatWhitespace(body);
-    return options?.streaming ? repairStreamingMarkdown(normalized) : normalized;
+    return repairStreamingMarkdown(normalized, streaming);
   }
 
   // 仍含 ReAct 痕迹则宁可空白，也不要把 Thought/Action/Observation 整段展示
@@ -109,7 +127,7 @@ export function formatAssistantDisplayText(
   }
 
   const normalized = normalizeChatWhitespace(s);
-  return options?.streaming ? repairStreamingMarkdown(normalized) : normalized;
+  return repairStreamingMarkdown(normalized, streaming);
 }
 
 export function normalizeChatWhitespace(text: string): string {

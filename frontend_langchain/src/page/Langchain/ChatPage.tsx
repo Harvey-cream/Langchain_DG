@@ -189,7 +189,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                     msg.content
                   ) : (
                     <AssistantBubbleContent
-                      key={`${msg.id}-${streamThis ? 'stream' : 'md'}`}
+                      key={msg.id}
                       rawContent={msg.content}
                       isStreaming={streamThis}
                     />
@@ -503,16 +503,23 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
   };
 
   const reconcileStreamingMessageFromServer = useCallback(
-    async (targetConversationId: number, localStreamingMsgId: string | null) => {
+    async (
+      targetConversationId: number,
+      localStreamingMsgId: string | null,
+      sessionId: number | null
+    ) => {
       if (!localStreamingMsgId) return;
       try {
-        const response = await chatApi.getConversationMessages(targetConversationId);
+        const response = await chatApi.getConversationMessages(
+          targetConversationId,
+          sessionId ?? undefined
+        );
         if (!response?.success) return;
         const history = response?.data?.messages || [];
-        const targetSessionId = streamSessionIdRef.current;
-        const matched = targetSessionId
-          ? history.find((item: { id: number }) => item.id === targetSessionId)
-          : history[history.length - 1];
+        const matched =
+          sessionId != null
+            ? history.find((item: { id: number }) => item.id === sessionId) ?? history[0]
+            : history[history.length - 1];
         const finalReply = String(matched?.ai_response ?? '').trim();
         if (!finalReply) return;
         setMessages(prev =>
@@ -534,7 +541,6 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       }
       streamAccumRef.current = { msgId: null, text: '' };
       typewriterRevealLenRef.current = 0;
-      streamSessionIdRef.current = null;
       setStreamingAssistantId(null);
       streamActiveRef.current = false;
       setStreamActive(false);
@@ -542,8 +548,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       setIsLoading(false);
       setLoadingConversationId(undefined);
       const cid = conversationIdRef.current;
+      const sid = streamSessionIdRef.current;
+      streamSessionIdRef.current = null;
       if (cid != null && msgId) {
-        void reconcileStreamingMessageFromServer(cid, msgId);
+        void reconcileStreamingMessageFromServer(cid, msgId, sid);
       }
     },
     [cancelTypewriter, reconcileStreamingMessageFromServer]
@@ -580,6 +588,14 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
 
   const flushStreamContent = useCallback(() => {
     streamFlushRafRef.current = null;
+    const { msgId, text: full } = streamAccumRef.current;
+    if (!msgId) return;
+    // 流式进行中：直接展示累计全文，避免打字机每帧 1～8 字造成「模型已出字、界面跟不上」
+    if (!pendingStreamEndRef.current) {
+      typewriterRevealLenRef.current = full.length;
+      setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: full } : m)));
+      return;
+    }
     scheduleTypewriterTick();
   }, [scheduleTypewriterTick]);
 
@@ -649,7 +665,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
                 timestamp: new Date().toLocaleTimeString(),
               },
             ]);
-            scheduleTypewriterTick();
+            scheduleStreamFlush();
             return;
           }
           streamAccumRef.current.text = mergeStreamingDelta(streamAccumRef.current.text, text);

@@ -17,7 +17,11 @@ from common.agent import (
     interview_checkpoint_thread_id,
     invoke_interview_agent_with_stream_callbacks,
 )
-from config.config import get_qwen_chat_model
+from common.extend import (
+    fallback_chat_title,
+    polish_interview_title,
+    schedule_async_title_polish,
+)
 from common_web.response_web import HttpResult
 from common_web.utils import format_datetime
 from django.db import close_old_connections
@@ -25,7 +29,6 @@ from django.http import JsonResponse, StreamingHttpResponse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
-from langchain_core.messages import HumanMessage
 from rest_framework.views import APIView
 
 from User.models import InterviewConversation, InterviewSession
@@ -33,37 +36,6 @@ from User.utils.user_utils import get_current_user
 logger = logging.getLogger(__name__)
 
 _MAX_ERROR_DETAIL_LEN = 8000
-_TITLE_MAX_LEN = 30
-
-
-def _fallback_title(message: str) -> str:
-    t = (message[:20] or "新对话").strip()
-    return t if t else "新对话"
-
-
-def _polish_interview_title(user_message: str) -> str:
-    """面试会话标题：提示词侧重求职/面试场景。"""
-    fb = _fallback_title(user_message)
-    if not user_message.strip():
-        return "新对话"
-    try:
-        llm = get_qwen_chat_model(temperature=0.3)
-        prompt = (
-            "你是标题助手。根据用户关于面试/求职的第一条消息，生成一个简短、通顺的中文会话标题。"
-            f"要求：5～15 个字为宜，不超过 {_TITLE_MAX_LEN} 个字；不要引号、不要标点结尾、不要解释、只输出标题一行。\n\n"
-            f"用户消息：\n{user_message[:800]}"
-        )
-        resp = llm.invoke([HumanMessage(content=prompt)])
-        text = (getattr(resp, "content", None) or str(resp)).strip()
-        text = text.splitlines()[0].strip()
-        for q in ('"', "'", "「", "」", "《", "》"):
-            text = text.replace(q, "")
-        text = text.strip()
-        if len(text) > _TITLE_MAX_LEN:
-            text = text[:_TITLE_MAX_LEN]
-        return text if text else fb
-    except Exception:
-        return fb
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -85,21 +57,44 @@ class InterviewChatView(APIView):
             conv = InterviewConversation.objects.filter(user=user, id=conversation_id).first()
             if not conv:
                 return HttpResult.fail("会话不存在")
-            sessions = (
-                InterviewSession.objects.filter(user=user, conversation_id=conversation_id)
-                .order_by("created_at")
-                .all()
-            )
-            messages: List[Dict[str, Any]] = []
-            for s in sessions:
-                messages.append(
+            session_id = request.query_params.get("session_id")
+            if session_id:
+                try:
+                    sid = int(session_id)
+                except ValueError:
+                    return HttpResult.fail("session_id 无效")
+                s = (
+                    InterviewSession.objects.filter(
+                        user=user, conversation_id=conversation_id, id=sid
+                    )
+                    .only("id", "question", "ai_response", "created_at")
+                    .first()
+                )
+                if not s:
+                    return HttpResult.fail("消息不存在")
+                messages = [
                     {
                         "id": s.id,
                         "question": s.question,
                         "ai_response": s.ai_response,
                         "created_at": format_datetime(s.created_at),
                     }
-                )
+                ]
+                return HttpResult.success_with_data("获取会话消息成功", {"messages": messages})
+            sessions = (
+                InterviewSession.objects.filter(user=user, conversation_id=conversation_id)
+                .order_by("created_at")
+                .only("id", "question", "ai_response", "created_at")
+            )
+            messages = [
+                {
+                    "id": s.id,
+                    "question": s.question,
+                    "ai_response": s.ai_response,
+                    "created_at": format_datetime(s.created_at),
+                }
+                for s in sessions
+            ]
             return HttpResult.success_with_data("获取会话消息成功", {"messages": messages})
 
         conversations = (
@@ -143,10 +138,19 @@ class InterviewChatView(APIView):
                 )
 
             if not conversation:
-                title = _polish_interview_title(message)
+                title = fallback_chat_title(message)
                 conversation = InterviewConversation.objects.create(
                     user=user,
                     title=title,
+                )
+                schedule_async_title_polish(
+                    conversation_id=conversation.id,
+                    user_id=user.pk,
+                    user_message=message,
+                    polish_fn=polish_interview_title,
+                    model=InterviewConversation,
+                    thread_name_prefix="polish-interview-title",
+                    log_context="interview chat",
                 )
 
             thread_id = interview_checkpoint_thread_id(user.pk, conversation.id)
@@ -207,8 +211,17 @@ class InterviewChatStreamView(APIView):
             conversation = InterviewConversation.objects.filter(id=conversation_id, user=user).first()
 
         if not conversation:
-            title = _polish_interview_title(msg_text)
+            title = fallback_chat_title(msg_text)
             conversation = InterviewConversation.objects.create(user=user, title=title)
+            schedule_async_title_polish(
+                conversation_id=conversation.id,
+                user_id=user.pk,
+                user_message=msg_text,
+                polish_fn=polish_interview_title,
+                model=InterviewConversation,
+                thread_name_prefix="polish-interview-title",
+                log_context="interview chat stream",
+            )
 
         thread_id = interview_checkpoint_thread_id(user.pk, conversation.id)
 

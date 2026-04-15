@@ -18,50 +18,22 @@ from User.models import UserConversation, UserSession
 from User.utils.user_utils import get_current_user
 from common_web.response_web import HttpResult
 from common_web.utils import format_datetime
-from config.config import get_qwen_chat_model
-from langchain_core.messages import HumanMessage
 from django.utils import timezone
 from common.agent import (
     agent_checkpoint_thread_id,
     chat as agent_chat,
     invoke_agent_with_stream_callbacks,
 )
+from common.extend import (
+    fallback_chat_title,
+    polish_agent_conversation_title,
+    schedule_async_title_polish,
+)
 
 logger = logging.getLogger(__name__)
 
 # 错误详情存库时截断，避免超长 traceback 撑爆数据库行
 _MAX_ERROR_DETAIL_LEN = 8000
-_TITLE_MAX_LEN = 30
-
-
-def _fallback_title(message: str) -> str:
-    t = (message[:20] or "新对话").strip()
-    return t if t else "新对话"
-
-
-def _polish_conversation_title(user_message: str) -> str:
-    """用千问根据首条用户消息生成简短标题；失败则回退为截取前 20 字。"""
-    fb = _fallback_title(user_message)
-    if not user_message.strip():
-        return "新对话"
-    try:
-        llm = get_qwen_chat_model(temperature=0.3)
-        prompt = (
-            "你是标题助手。根据用户的第一条消息，生成一个简短、通顺的中文会话标题。"
-            f"要求：5～15 个字为宜，不超过 {_TITLE_MAX_LEN} 个字；不要引号、不要标点结尾、不要解释、只输出标题一行。\n\n"
-            f"用户消息：\n{user_message[:800]}"
-        )
-        resp = llm.invoke([HumanMessage(content=prompt)])
-        text = (getattr(resp, "content", None) or str(resp)).strip()
-        text = text.splitlines()[0].strip()
-        for q in ('"', "'", "「", "」", "《", "》"):
-            text = text.replace(q, "")
-        text = text.strip()
-        if len(text) > _TITLE_MAX_LEN:
-            text = text[:_TITLE_MAX_LEN]
-        return text if text else fb
-    except Exception:
-        return fb
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -80,23 +52,46 @@ class ChatView(APIView):
 
         conversation_id = request.query_params.get("conversation_id")
 
-        # 返回指定会话的历史消息
+        # 返回指定会话的历史消息；可选 session_id 仅拉一条（流式结束对账，避免长会话全表扫描）
         if conversation_id:
-            sessions = (
-                UserSession.objects.filter(user=user, conversation_id=conversation_id)
-                .order_by("created_at")
-                .all()
-            )
-            messages: List[Dict[str, Any]] = []
-            for s in sessions:
-                messages.append(
+            session_id = request.query_params.get("session_id")
+            if session_id:
+                try:
+                    sid = int(session_id)
+                except ValueError:
+                    return HttpResult.fail("session_id 无效")
+                s = (
+                    UserSession.objects.filter(
+                        user=user, conversation_id=conversation_id, id=sid
+                    )
+                    .only("id", "question", "ai_response", "created_at")
+                    .first()
+                )
+                if not s:
+                    return HttpResult.fail("消息不存在")
+                messages = [
                     {
                         "id": s.id,
                         "question": s.question,
                         "ai_response": s.ai_response,
                         "created_at": format_datetime(s.created_at),
                     }
-                )
+                ]
+                return HttpResult.success_with_data("获取会话消息成功", {"messages": messages})
+            sessions = (
+                UserSession.objects.filter(user=user, conversation_id=conversation_id)
+                .order_by("created_at")
+                .only("id", "question", "ai_response", "created_at")
+            )
+            messages = [
+                {
+                    "id": s.id,
+                    "question": s.question,
+                    "ai_response": s.ai_response,
+                    "created_at": format_datetime(s.created_at),
+                }
+                for s in sessions
+            ]
             return HttpResult.success_with_data("获取会话消息成功", {"messages": messages})
 
         # 置顶优先，其次按置顶先后（pinned_at 越早越靠前）
@@ -146,11 +141,19 @@ class ChatView(APIView):
                 )
 
             if not conversation:
-                # 会话标题：千问润色生成；失败则取用户问题前 20 字
-                title = _polish_conversation_title(message)
+                title = fallback_chat_title(message)
                 conversation = UserConversation.objects.create(
                     user=user,
                     title=title,
+                )
+                schedule_async_title_polish(
+                    conversation_id=conversation.id,
+                    user_id=user.pk,
+                    user_message=message,
+                    polish_fn=polish_agent_conversation_title,
+                    model=UserConversation,
+                    thread_name_prefix="polish-title",
+                    log_context="agent chat",
                 )
 
             thread_id = agent_checkpoint_thread_id(user.pk, conversation.id)
@@ -226,8 +229,17 @@ class ChatStreamView(APIView):
             conversation = UserConversation.objects.filter(id=conversation_id, user=user).first()
 
         if not conversation:
-            title = _polish_conversation_title(msg_text)
+            title = fallback_chat_title(msg_text)
             conversation = UserConversation.objects.create(user=user, title=title)
+            schedule_async_title_polish(
+                conversation_id=conversation.id,
+                user_id=user.pk,
+                user_message=msg_text,
+                polish_fn=polish_agent_conversation_title,
+                model=UserConversation,
+                thread_name_prefix="polish-title",
+                log_context="agent chat stream",
+            )
 
         thread_id = agent_checkpoint_thread_id(user.pk, conversation.id)
 

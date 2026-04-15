@@ -50,6 +50,9 @@ def get_sqlite_checkpointer() -> SqliteSaver:
                 str(CHECKPOINT_SQLITE_PATH),
                 check_same_thread=False,
             )
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA synchronous=NORMAL")
             _sqlite_checkpointer = SqliteSaver(conn)
         return _sqlite_checkpointer
 
@@ -244,14 +247,15 @@ def get_interview_agent_executor(
 def get_cached_agent_executor(*, temperature: float = 0.45, streaming: bool = False) -> CompiledStateGraph:
     """非流式用于普通 chat；streaming=True 使用独立缓存，千问以 token 流式输出。"""
     global _agent_graph_cache, _agent_graph_stream_cache
-    all_tools = list(get_all_agent_tools())
     if streaming:
         if _agent_graph_stream_cache is None:
+            all_tools = list(get_all_agent_tools())
             _agent_graph_stream_cache = build_react_rag_agent(
                 temperature=temperature, streaming=True, tools=all_tools
             )
         return _agent_graph_stream_cache
     if _agent_graph_cache is None:
+        all_tools = list(get_all_agent_tools())
         _agent_graph_cache = build_react_rag_agent(
             temperature=temperature, streaming=False, tools=all_tools
         )

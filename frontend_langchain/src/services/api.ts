@@ -20,9 +20,14 @@ export const login = (params: LoginRequest) => sendReleaseRequest("/api/user/log
 // 获取会话列表
 export const getConversations = () => sendRequest("/api/agent/chat/", 'GET');
 
-// 获取某个会话详情（历史消息）
-export const getConversationMessages = (conversationId: number) =>
-  sendRequest(`/api/agent/chat/?conversation_id=${conversationId}`, 'GET');
+// 获取某个会话详情（历史消息）；sessionId 仅取一条，用于流式结束对账、避免拉全量
+export const getConversationMessages = (conversationId: number, sessionId?: number) =>
+  sendRequest(
+    `/api/agent/chat/?conversation_id=${conversationId}${
+      sessionId != null ? `&session_id=${sessionId}` : ''
+    }`,
+    'GET'
+  );
 
 /** 更新会话：重命名 title 和/或 置顶 pinned */
 export const patchConversation = (params: {
@@ -39,8 +44,13 @@ export const deleteConversation = (conversationId: number) =>
 
 export const getInterviewConversations = () => sendRequest('/api/interview/chat/', 'GET');
 
-export const getInterviewConversationMessages = (conversationId: number) =>
-  sendRequest(`/api/interview/chat/?conversation_id=${conversationId}`, 'GET');
+export const getInterviewConversationMessages = (conversationId: number, sessionId?: number) =>
+  sendRequest(
+    `/api/interview/chat/?conversation_id=${conversationId}${
+      sessionId != null ? `&session_id=${sessionId}` : ''
+    }`,
+    'GET'
+  );
 
 export const patchInterviewConversation = (params: {
   conversation_id: number;

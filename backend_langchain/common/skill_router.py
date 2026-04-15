@@ -102,8 +102,9 @@ _ROUTER_DEBUG = os.getenv("SKILL_ROUTER_DEBUG", "0").strip() == "1"
 logger = logging.getLogger(__name__)
 _embedding_singleton: Embeddings | None = None
 _embedding_lock = threading.Lock()
-_skill_vec_cache: dict[str, list[float]] = {}
-_skill_vec_lock = threading.Lock()
+# 每条 prototype / anti_prototype 文案只嵌入一次，避免每条用户消息重复十几次 embed_query。
+_phrase_vec_cache: dict[str, list[float]] = {}
+_phrase_vec_lock = threading.Lock()
 
 
 def _get_embeddings() -> Embeddings:
@@ -125,6 +126,17 @@ def _embed_text(text: str) -> list[float]:
     return emb.embed_query((text or "").strip())
 
 
+def _embed_phrase_cached(text: str) -> list[float]:
+    key = (text or "").strip()
+    if not key:
+        return []
+    if key not in _phrase_vec_cache:
+        with _phrase_vec_lock:
+            if key not in _phrase_vec_cache:
+                _phrase_vec_cache[key] = _embed_text(key)
+    return _phrase_vec_cache[key]
+
+
 def _cosine(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return -1.0
@@ -140,27 +152,15 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (math.sqrt(na) * math.sqrt(nb))
 
 
-def _skill_vector(spec: SkillSpec) -> list[float]:
-    if spec.name not in _skill_vec_cache:
-        with _skill_vec_lock:
-            if spec.name not in _skill_vec_cache:
-                text = (
-                    f"skill={spec.name}\n"
-                    f"when={spec.when}\n"
-                    f"schema={spec.output_schema}\n"
-                    f"prototypes={' | '.join(spec.prototypes)}\n"
-                    f"anti={' | '.join(spec.anti_prototypes)}"
-                )
-                _skill_vec_cache[spec.name] = _embed_text(text)
-    return _skill_vec_cache[spec.name]
-
-
 def _skill_match_score(query_vec: list[float], spec: SkillSpec) -> float:
-    proto_scores = [_cosine(query_vec, _embed_text(p)) for p in spec.prototypes]
+    proto_scores = [_cosine(query_vec, _embed_phrase_cached(p)) for p in spec.prototypes]
+    when_text = (spec.when or "").strip()
+    if when_text:
+        proto_scores.append(_cosine(query_vec, _embed_phrase_cached(when_text)))
     best_proto = max(proto_scores) if proto_scores else -1.0
     if not spec.anti_prototypes:
         return best_proto
-    anti_scores = [_cosine(query_vec, _embed_text(p)) for p in spec.anti_prototypes]
+    anti_scores = [_cosine(query_vec, _embed_phrase_cached(p)) for p in spec.anti_prototypes]
     best_anti = max(anti_scores) if anti_scores else 0.0
     # 反向惩罚：降低错误路由（例如“什么是X”误进 coding_coach）。
     return best_proto - 0.25 * best_anti

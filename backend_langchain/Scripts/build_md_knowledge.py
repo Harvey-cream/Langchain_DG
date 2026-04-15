@@ -4,7 +4,7 @@
 默认：四套文档目录 → 四个独立 persist 目录（同 collection 名，靠路径隔离）。
 自定义：--docs-dirs + --chroma-dir 合并进一个库。
 
-下载 embedding 模型：默认通过 common.hf_mirror 设置 HF_ENDPOINT=https://hf-mirror.com（国内镜像）。
+下载 embedding 模型：默认通过 common.extend 设置 HF_ENDPOINT=https://hf-mirror.com（国内镜像）。
 已在环境或 .env 中配置 HF_ENDPOINT 时不会被覆盖；需要直连官方可加参数 --no-hf-mirror。
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from dotenv import load_dotenv
-from common.hf_mirror import apply_hf_mirror_default
+from common.extend import apply_hf_mirror_default
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_community.embeddings import HuggingFaceEmbeddings

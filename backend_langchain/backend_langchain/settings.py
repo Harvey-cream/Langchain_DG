@@ -13,7 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 
-from common.hf_mirror import apply_hf_mirror_default
+from common.extend import apply_hf_mirror_default
 from env.provider import settings_conf
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.

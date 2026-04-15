@@ -5,7 +5,7 @@ import threading
 
 from langchain_core.embeddings import Embeddings
 
-from common.hf_mirror import apply_hf_mirror_default
+from common.extend import apply_hf_mirror_default
 
 # 私有仓库可写默认 Key；环境变量 DASHSCOPE_API_KEY 优先。
 _DEFAULT_DASHSCOPE_API_KEY = "sk-4e2f0a91dd2a4f36b7be88ffdcc0b294"

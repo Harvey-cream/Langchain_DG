@@ -19,7 +19,10 @@ import {
 
 export type ChatApiClient = {
   getConversations: () => ReturnType<typeof getConversations>;
-  getConversationMessages: (conversationId: number) => ReturnType<typeof getConversationMessages>;
+  getConversationMessages: (
+    conversationId: number,
+    sessionId?: number
+  ) => ReturnType<typeof getConversationMessages>;
   patchConversation: typeof patchConversation;
   deleteConversation: typeof deleteConversation;
   chatWithStream: (

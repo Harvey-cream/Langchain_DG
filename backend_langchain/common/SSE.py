@@ -134,10 +134,10 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
         minimum=12,
         maximum=256,
     )
-    # 累积到该阈值才发送，避免 token 很碎时退化成单字 delta。
+    # 累积到该阈值才发送；默认略低以缩短首包可见延迟（仍可用 SSE_DELTA_MIN_EMIT_CHARS 调高减请求次数）。
     _DELTA_MIN_EMIT_CHARS = _int_env(
         "SSE_DELTA_MIN_EMIT_CHARS",
-        64,
+        24,
         minimum=8,
         maximum=128,
     )
