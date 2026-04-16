@@ -31,6 +31,8 @@ class Settings:
 
     def __init__(self) -> None:
         self.env = os.environ.get("DJANGO_ENV", "debug").strip()
+        # 启动时固定打印，避免日志级别为 WARNING 时看不到环境信息。
+        print(f"[env] DJANGO_ENV={self.env}", flush=True)
         logger.info("当前环境: %s", self.env)
 
         self._settings_debug = "settings_debug.yaml"

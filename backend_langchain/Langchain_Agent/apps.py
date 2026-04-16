@@ -24,11 +24,20 @@ class LangchainAgentConfig(AppConfig):
         def _warm() -> None:
             try:
                 from Langchain_Agent.tools import warmup_rag_singletons
+                from common.skill_router import warmup_skill_phrase_cache
+                from common.agent import warmup_agent_executors
 
                 warmup_rag_singletons()
                 logger.info("Langchain_Agent: RAG singletons warmup finished")
+                warmup_skill_phrase_cache()
+                logger.info("Langchain_Agent: skill phrase cache warmup finished")
+                warmup_agent_executors()
+                logger.info("Langchain_Agent: agent executors warmup finished")
             except Exception:
-                logger.exception("Langchain_Agent: RAG warmup failed (first request will retry)")
+                logger.exception(
+                    "Langchain_Agent: startup warmup failed (RAG / skill phrases / agents; "
+                    "first request will retry)"
+                )
 
         # 不阻塞 migrate / collectstatic；后台线程加载
         threading.Thread(target=_warm, name="rag-warmup", daemon=True).start()

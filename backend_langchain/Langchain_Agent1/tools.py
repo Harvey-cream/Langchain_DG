@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import List
@@ -9,6 +10,8 @@ from langchain_core.tools import tool
 from langchain_community.vectorstores import Chroma
 
 from common.embedding import get_embedding_model
+
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
 _COLLECTION_NAME = "md_knowledge"
 _EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"

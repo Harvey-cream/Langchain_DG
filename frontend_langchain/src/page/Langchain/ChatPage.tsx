@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Modal, message } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
+import { createRoot, type Root } from 'react-dom/client';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import type { Components } from 'react-markdown';
@@ -48,6 +49,10 @@ type ChatViewProps = {
   onPinConversation: (conversationId: number, pinned: boolean) => Promise<void>;
   /** 当前 SSE 正在写入的助手消息 id；流式阶段纯文本，结束后 Markdown */
   streamingAssistantId: string | null;
+  /** 流式正文直写 DOM，避免每 token setMessages 触发整表 reconcile */
+  streamingContentRef: React.MutableRefObject<HTMLDivElement | null>;
+  /** 流式中复制「当前可见清洗正文」 */
+  getStreamingFormatted?: () => string;
 };
 
 /** 网络层 delta 合并：防重复片段、累计全文、后缀重叠去重 */
@@ -103,6 +108,7 @@ const CHAT_MD_COMPONENTS: Components = {
     );
   },
 };
+const CHAT_REMARK_PLUGINS = [remarkGfm, remarkBreaks];
 
 /** 流式中：纯文本增量（避免每帧全量 remark 解析）；结束后：Markdown */
 const AssistantBubbleContent = React.memo(function AssistantBubbleContent({
@@ -113,7 +119,6 @@ const AssistantBubbleContent = React.memo(function AssistantBubbleContent({
   isStreaming: boolean;
 }) {
   const aiDisplay = formatAssistantDisplayText(rawContent, { streaming: isStreaming });
-  const remarkPlugins = useMemo(() => [remarkGfm, remarkBreaks], []);
 
   if (isStreaming && !aiDisplay.trim()) {
     return <span className="chat-assistant-pending">正在生成回复…</span>;
@@ -124,7 +129,7 @@ const AssistantBubbleContent = React.memo(function AssistantBubbleContent({
 
   return (
     <div className="chat-markdown">
-      <ReactMarkdown remarkPlugins={remarkPlugins} components={CHAT_MD_COMPONENTS}>
+      <ReactMarkdown remarkPlugins={CHAT_REMARK_PLUGINS} components={CHAT_MD_COMPONENTS}>
         {aiDisplay}
       </ReactMarkdown>
     </div>
@@ -152,6 +157,8 @@ const ChatView: React.FC<ChatViewProps> = ({
   onDeleteConversation,
   onPinConversation,
   streamingAssistantId,
+  streamingContentRef,
+  getStreamingFormatted,
 }) => {
   return (
     <div className="chat-layout">
@@ -174,11 +181,20 @@ const ChatView: React.FC<ChatViewProps> = ({
 
         <div className="chat-messages" ref={messagesContainerRef}>
           {messages
-            .filter(m => m.isUser || m.content.trim())
+            .filter(
+              m =>
+                m.isUser ||
+                m.content.trim() ||
+                (streamActive && streamingAssistantId === m.id)
+            )
             .map(msg => {
-              const aiDisplay = msg.isUser ? '' : formatAssistantDisplayText(msg.content);
               const streamThis =
                 !msg.isUser && streamActive && streamingAssistantId === msg.id;
+              const aiDisplay = msg.isUser
+                ? ''
+                : streamThis && getStreamingFormatted
+                  ? getStreamingFormatted()
+                  : formatAssistantDisplayText(msg.content);
               return (
             <div key={msg.id} className={`message ${msg.isUser ? 'user-message' : 'ai-message'}`}>
               <div className="message-bubble-row">
@@ -187,11 +203,18 @@ const ChatView: React.FC<ChatViewProps> = ({
                 >
                   {msg.isUser ? (
                     msg.content
+                  ) : streamThis ? (
+                    <div
+                      ref={el => {
+                        streamingContentRef.current = el;
+                      }}
+                      className="chat-markdown chat-stream-direct"
+                    />
                   ) : (
                     <AssistantBubbleContent
                       key={msg.id}
                       rawContent={msg.content}
-                      isStreaming={streamThis}
+                      isStreaming={false}
                     />
                   )}
                 </div>
@@ -288,9 +311,21 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
   const scrollRafRef = useRef<number | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const streamSessionIdRef = useRef<number | null>(null);
+  /** 流式助手气泡：直写 DOM，避免每个 delta 触发 messages 全量更新 */
+  const streamingContentRef = useRef<HTMLDivElement | null>(null);
+  const streamingRenderRootRef = useRef<Root | null>(null);
+  const streamingRenderHostRef = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const activeConversationStorageKey = `chat.activeConversationId:${pathname}`;
+
+  const disposeStreamingDomRenderer = useCallback(() => {
+    if (streamingRenderRootRef.current) {
+      streamingRenderRootRef.current.unmount();
+      streamingRenderRootRef.current = null;
+    }
+    streamingRenderHostRef.current = null;
+  }, []);
 
   const persistActiveConversationId = useCallback(
     (id: number | undefined) => {
@@ -426,6 +461,45 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     shouldStickToBottomRef.current = distanceToBottom <= 80;
   }, []);
 
+  const scrollToBottomIfStuck = useCallback(() => {
+    if (!shouldStickToBottomRef.current) return;
+    requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    });
+  }, []);
+
+  const writeStreamingDom = useCallback(
+    (full: string, streaming: boolean) => {
+      const host = streamingContentRef.current;
+      if (!host) return false;
+      if (streamingRenderHostRef.current !== host) {
+        disposeStreamingDomRenderer();
+        streamingRenderHostRef.current = host;
+        streamingRenderRootRef.current = createRoot(host);
+      }
+      const root = streamingRenderRootRef.current;
+      if (!root) return false;
+      const display = formatAssistantDisplayText(full, { streaming });
+      root.render(
+        display.trim() ? (
+          <ReactMarkdown remarkPlugins={CHAT_REMARK_PLUGINS} components={CHAT_MD_COMPONENTS}>
+            {display}
+          </ReactMarkdown>
+        ) : (
+          <span className="chat-assistant-pending">正在生成回复…</span>
+        )
+      );
+      scrollToBottomIfStuck();
+      return true;
+    },
+    [disposeStreamingDomRenderer, scrollToBottomIfStuck]
+  );
+
+  const getStreamingFormatted = useCallback(
+    () => formatAssistantDisplayText(streamAccumRef.current.text, { streaming: true }),
+    []
+  );
+
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
@@ -459,6 +533,14 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
   useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
+
+  useEffect(() => {
+    if (!streamActive) {
+      disposeStreamingDomRenderer();
+    }
+  }, [disposeStreamingDomRenderer, streamActive]);
+
+  useEffect(() => () => disposeStreamingDomRenderer(), [disposeStreamingDomRenderer]);
 
   useEffect(() => () => cancelTypewriter(), [cancelTypewriter]);
 
@@ -574,7 +656,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
         revealed = Math.min(revealed + step, target);
         typewriterRevealLenRef.current = revealed;
         const slice = full.slice(0, revealed);
-        setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: slice } : m)));
+        if (!writeStreamingDom(slice, true)) {
+          requestAnimationFrame(() => writeStreamingDom(slice, true));
+        }
       }
 
       if (revealed < target) {
@@ -584,7 +668,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       }
     };
     typewriterRafRef.current = requestAnimationFrame(tick);
-  }, [runStreamTeardown]);
+  }, [runStreamTeardown, writeStreamingDom]);
 
   const flushStreamContent = useCallback(() => {
     streamFlushRafRef.current = null;
@@ -593,11 +677,13 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     // 流式进行中：直接展示累计全文，避免打字机每帧 1～8 字造成「模型已出字、界面跟不上」
     if (!pendingStreamEndRef.current) {
       typewriterRevealLenRef.current = full.length;
-      setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: full } : m)));
+      if (!writeStreamingDom(full, true)) {
+        requestAnimationFrame(() => writeStreamingDom(full, true));
+      }
       return;
     }
     scheduleTypewriterTick();
-  }, [scheduleTypewriterTick]);
+  }, [scheduleTypewriterTick, writeStreamingDom]);
 
   const scheduleStreamFlush = useCallback(() => {
     if (streamFlushRafRef.current != null) return;
@@ -866,6 +952,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
         onDeleteConversation={handleDeleteConversation}
         onPinConversation={handlePinConversation}
         streamingAssistantId={streamingAssistantId}
+        streamingContentRef={streamingContentRef}
+        getStreamingFormatted={getStreamingFormatted}
       />
     </div>
   );

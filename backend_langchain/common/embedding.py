@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+import logging
 
 from langchain_core.embeddings import Embeddings
 
@@ -16,6 +17,19 @@ _embedding_lock = threading.Lock()
 # 与 env/provider.py 中选用 settings_pro.yaml 的环境一致时才走向量 API；
 # 未设置 DJANGO_ENV、debug、dev、local 等均走本地 HuggingFace（与本地开发一致）。
 _PRODUCTION_DJANGO_ENVS = frozenset({"production", "pro", "prod"})
+logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _use_hf_offline_mode() -> bool:
+    # 默认离线优先；如需联网探测可设 HF_LOCAL_FILES_ONLY=0
+    return _env_flag("HF_LOCAL_FILES_ONLY", True)
 
 
 def _is_production_embedding_env() -> bool:
@@ -88,9 +102,22 @@ def get_embedding_model(
                     apply_hf_mirror_default()
                     from langchain_community.embeddings import HuggingFaceEmbeddings
 
+                    offline_mode = _use_hf_offline_mode()
+                    if offline_mode:
+                        # 让底层 huggingface_hub/transformers 进入离线模式，避免网络探测重试拖慢请求。
+                        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+                        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+                    logger.info(
+                        "embedding init: backend=huggingface model=%s offline_mode=%s",
+                        model_name,
+                        offline_mode,
+                    )
                     _embedding_cache[key] = HuggingFaceEmbeddings(
                         model_name=model_name,
-                        model_kwargs={"device": device},
+                        model_kwargs={
+                            "device": device,
+                            "local_files_only": offline_mode,
+                        },
                         encode_kwargs={
                             "normalize_embeddings": normalize_embeddings,
                             "batch_size": batch_size,

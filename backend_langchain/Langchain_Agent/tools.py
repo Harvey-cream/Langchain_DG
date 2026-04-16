@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from typing import List
 from pathlib import Path
@@ -12,6 +13,7 @@ from langchain_community.vectorstores import Chroma
 from common.embedding import get_embedding_model
 
 logger = logging.getLogger(__name__)
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
 # 与 Scripts/build_md_knowledge.py 一致：同一 collection 名，数据按子目录隔离。
 # 检索时：Chroma(persist_directory=.../chroma_db/<子目录名>) 只读该目录下的向量集合。

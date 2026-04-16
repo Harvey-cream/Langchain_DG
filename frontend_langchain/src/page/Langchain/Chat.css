@@ -331,6 +331,12 @@
   text-align: left;
 }
 
+/* 流式阶段直写 textContent：与正文同字号，保留换行，结束后切换 remark 渲染 */
+.chat-stream-direct {
+  white-space: pre-wrap;
+  min-height: 1.2em;
+}
+
 /* 流式中：纯文本增量（避免每帧全量 Markdown 解析）；样式与 .chat-markdown 对齐，结束时切换为 remark */
 .chat-stream-plain {
   font-size: 14px;

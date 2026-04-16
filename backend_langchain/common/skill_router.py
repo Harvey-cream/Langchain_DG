@@ -51,16 +51,21 @@ AGENT_SKILLS: tuple[SkillSpec, ...] = (
         prototypes=(
             "用户在问某个概念是什么、怎么理解、原理是什么。",
             "用户询问 OpenClaw、Vibe Coding、RAG、Agent 等教程/知识库条目。",
+            "用户询问 MCP（Model Context Protocol）是什么、做什么、和其他方案有什么区别。",
             "用户希望解释术语、做知识点对比与归纳总结。",
         ),
     ),
     SkillSpec(
         name="repo_inspector",
-        when="用户提供 GitHub/Gitee 仓库地址；优先使用已接入的 MCP 工具（如 Gitee MCP）解析元信息与仓库能力",
+        when="仅当用户提供 GitHub/Gitee 仓库链接（或明确仓库坐标）时触发；用于解析仓库元信息与能力",
         output_schema="仓库识别 -> 关键信息提取 -> 结构化总结 -> 下一步建议",
         prototypes=(
             "用户贴了 github 或 gitee 仓库链接，希望解析仓库信息、star、分支、issues。",
-            "用户想快速了解一个开源仓库，要求给出仓库简介与关键指标。",
+            "用户给出 owner/repo 等仓库坐标，要求分析该开源仓库的结构与关键指标。",
+        ),
+        anti_prototypes=(
+            "用户只是在问概念定义，例如 MCP 是什么、原理是什么、和谁的区别是什么。",
+            "用户没有提供任何 GitHub/Gitee 仓库链接或仓库坐标。",
         ),
     ),
 )
@@ -137,6 +142,34 @@ def _embed_phrase_cached(text: str) -> list[float]:
     return _phrase_vec_cache[key]
 
 
+def _all_skill_phrase_keys() -> list[str]:
+    seen: set[str] = set()
+    keys: list[str] = []
+    for catalog in (AGENT_SKILLS, INTERVIEW_SKILLS):
+        for spec in catalog:
+            for p in spec.prototypes:
+                k = (p or "").strip()
+                if k and k not in seen:
+                    seen.add(k)
+                    keys.append(k)
+            for p in spec.anti_prototypes:
+                k = (p or "").strip()
+                if k and k not in seen:
+                    seen.add(k)
+                    keys.append(k)
+            w = (spec.when or "").strip()
+            if w and w not in seen:
+                seen.add(w)
+                keys.append(w)
+    return keys
+
+
+def warmup_skill_phrase_cache() -> None:
+    """启动时预计算 skill 路由所需短语向量，填入进程内缓存。"""
+    for phrase_key in _all_skill_phrase_keys():
+        _embed_phrase_cached(phrase_key)
+
+
 def _cosine(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return -1.0
@@ -197,6 +230,13 @@ def _pick_skill(user_input: str, skills: Iterable[SkillSpec]) -> SkillSpec | Non
             print("skill_router not selected: best score below threshold")
             logger.info("skill_router not selected: best score below threshold")
         return None
+    preview = (user_input or "").replace("\n", " ")[:120]
+    logger.info(
+        "skill_router selected=%s score=%.4f input=%r",
+        best.name,
+        best_score,
+        preview,
+    )
     if _ROUTER_DEBUG:
         print(f"skill_router selected={best.name}")
         logger.info("skill_router selected=%s", best.name)

@@ -28,6 +28,10 @@ mcp>=1.9.2,<2
 langsmith>=0.1.17
 # RAG 读本地 Chroma 目录；检索时嵌入由 API 提供（生产）或本地 HF（开发，见 requirements-dev）
 chromadb==0.4.24
+# chromadb 0.4.x 依赖 numpy 1.x API（np.float_）；与 numpy 2.x 不兼容
+numpy>=1.26.0,<2.0
+# 与 chromadb==0.4.24 的 telemetry 接口保持兼容，避免 posthog 7.x capture 签名不兼容
+posthog>=2.4.0,<6.0
 python-dotenv
 PyYAML>=6.0.1,<7.0
 dashscope>=1.19.0

@@ -262,6 +262,17 @@ def get_cached_agent_executor(*, temperature: float = 0.45, streaming: bool = Fa
     return _agent_graph_cache
 
 
+def warmup_agent_executors(*, temperature: float = 0.45) -> None:
+    """
+    进程启动时构建四套 CompiledStateGraph 单例（普通/面试 × 流式/非流式），
+    避免首个用户请求才加载 LLM 客户端与图。
+    """
+    get_cached_agent_executor(temperature=temperature, streaming=False)
+    get_cached_agent_executor(temperature=temperature, streaming=True)
+    get_interview_agent_executor(temperature=temperature, streaming=False)
+    get_interview_agent_executor(temperature=temperature, streaming=True)
+
+
 def invoke_agent_with_stream_callbacks(
     user_input: str,
     callbacks: Sequence[Any],
