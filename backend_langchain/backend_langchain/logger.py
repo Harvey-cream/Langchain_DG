@@ -37,6 +37,11 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "Langchain_Agent.views": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
         "chromadb.telemetry": {
             "handlers": ["console"],
             "level": "CRITICAL",

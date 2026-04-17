@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Optional, Any
+from typing import Optional, Any, Callable
 from uuid import UUID
 from queue import Queue
 
@@ -142,14 +142,27 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
         maximum=128,
     )
 
-    def __init__(self, q: Queue) -> None:
+    def __init__(self, q: Queue, trace_cb: Optional[Callable[[str], None]] = None) -> None:
         self._q = q
+        self._trace_cb = trace_cb
         self._buf = ""
         self._fa_end: Optional[int] = None
         self._sent_tail_len = 0
         self._stopped = False
         self._stream_closed = False
         self._emit_buf = ""
+        self._first_token_traced = False
+        self._final_answer_hit_traced = False
+        self._first_delta_traced = False
+
+    def _trace(self, event: str) -> None:
+        if not self._trace_cb:
+            return
+        try:
+            self._trace_cb(event)
+        except Exception:
+            # 埋点不能影响主流程
+            return
 
     def _flush_emit_buffer(self, *, force: bool = False) -> None:
         """
@@ -187,6 +200,9 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
         self._sent_tail_len = 0
         self._stopped = False
         self._emit_buf = ""
+        self._first_token_traced = False
+        self._final_answer_hit_traced = False
+        self._first_delta_traced = False
 
     def on_llm_end(self, response: Any, **kwargs: Any) -> None:
         """单次 LLM 生成结束：刷出 holdback。无 Final Answer 标记时（原生 tool calling 末轮常见）按全文可见处理。"""
@@ -204,15 +220,24 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
             return
         if not token:
             return
+        if not self._first_token_traced:
+            self._first_token_traced = True
+            self._trace("first_token")
         self._buf += token
         if self._fa_end is None:
             m = _FINAL_ANSWER_SPLIT_RE.search(self._buf)
             if m:
                 self._fa_end = m.end()
+                if not self._final_answer_hit_traced:
+                    self._final_answer_hit_traced = True
+                    self._trace("final_answer_hit")
             else:
                 m2 = _FINAL_ANSWER_START_RE.match(self._buf)
                 if m2:
                     self._fa_end = m2.end()
+                    if not self._final_answer_hit_traced:
+                        self._final_answer_hit_traced = True
+                        self._trace("final_answer_hit")
                 else:
                     return
         self._flush_deltas()
@@ -249,6 +274,9 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
 
         new_part = tail[self._sent_tail_len : safe_len]
         if new_part:
+            if not self._first_delta_traced:
+                self._first_delta_traced = True
+                self._trace("first_delta")
             self._emit_buf += new_part
             self._flush_emit_buffer(force=self._stream_closed or self._stopped)
         self._sent_tail_len = safe_len

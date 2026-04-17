@@ -4,6 +4,8 @@ import logging
 import queue
 import threading
 import traceback
+import time
+from uuid import uuid4
 from typing import List, Dict, Any, Iterator
 
 from common.SSE import _sse_bytes, _user_visible_reply, _TOKEN_STREAM_END, _FinalAnswerOnlyTokenHandler
@@ -214,6 +216,19 @@ class ChatStreamView(APIView):
     _PING_INTERVAL_SEC = 2.0
 
     def post(self, request):
+        trace_start = time.perf_counter()
+        trace_id = f"stream-{uuid4().hex[:10]}"
+
+        def trace_event(event: str, **extra: Any) -> None:
+            elapsed_ms = int((time.perf_counter() - trace_start) * 1000)
+            fields = {
+                "trace_id": trace_id,
+                "event": event,
+                "elapsed_ms": elapsed_ms,
+                **extra,
+            }
+            logger.info("chat_stream_trace %s", fields)
+
         user = get_current_user(request)
         if not user:
             return JsonResponse({"success": False, "msg": "认证失败，请重新登录"}, status=401)
@@ -222,6 +237,7 @@ class ChatStreamView(APIView):
         msg_text = (data.get("message") or "").strip()
         if not msg_text:
             return JsonResponse({"success": False, "msg": "消息不能为空"}, status=400)
+        trace_event("request_enter", user_id=getattr(user, "pk", None), msg_len=len(msg_text))
 
         conversation_id = data.get("conversation_id")
         conversation = None
@@ -249,6 +265,11 @@ class ChatStreamView(APIView):
             question=msg_text,
             ai_response="",
         )
+        trace_event(
+            "session_created",
+            conversation_id=conversation.id,
+            session_id=session_obj.id,
+        )
 
         def gen() -> Iterator[bytes]:
             result_q: queue.Queue = queue.Queue(maxsize=1)
@@ -263,12 +284,13 @@ class ChatStreamView(APIView):
                     warmup_rag_singletons()
                 except Exception:
                     logger.exception("chat_stream: warmup_rag_singletons failed")
-                handler = _FinalAnswerOnlyTokenHandler(token_q)
+                handler = _FinalAnswerOnlyTokenHandler(token_q, trace_cb=trace_event)
                 try:
                     reply = invoke_agent_with_stream_callbacks(
                         msg_text,
                         [handler],
                         thread_id=thread_id,
+                        trace_cb=trace_event,
                     )
                     result_q.put(("ok", reply))
                 except Exception as e:  # noqa: BLE001
@@ -308,6 +330,7 @@ class ChatStreamView(APIView):
             stream_done_sent = False
             if got_token_end and tokens_received:
                 yield _sse_bytes({"type": "stream_done"})
+                trace_event("stream_done", tokens_received=tokens_received)
                 stream_done_sent = True
 
             # 须先 join + 落库，再发 done：若先发 done，浏览器/前端常会立刻断开，迭代器可能被中止，save() 来不及执行。
@@ -329,6 +352,7 @@ class ChatStreamView(APIView):
                 else:
                     logger.error("chat_stream: result_q empty after worker join")
                 yield _sse_bytes({"type": "done"})
+                trace_event("done", status="result_queue_empty", tokens_received=tokens_received)
                 return
 
             if kind == "err":
@@ -344,6 +368,7 @@ class ChatStreamView(APIView):
                 else:
                     logger.error("chat_stream: agent invoke failed after stream ended: %s", err, exc_info=True)
                 yield _sse_bytes({"type": "done"})
+                trace_event("done", status="agent_error", tokens_received=tokens_received)
                 return
 
             reply = str(payload)
@@ -359,8 +384,10 @@ class ChatStreamView(APIView):
                     yield _sse_bytes({"type": "delta", "text": chunk})
                 if got_token_end and not stream_done_sent:
                     yield _sse_bytes({"type": "stream_done"})
+                    trace_event("stream_done", tokens_received=tokens_received)
 
             yield _sse_bytes({"type": "done"})
+            trace_event("done", status="ok", tokens_received=tokens_received)
 
         resp = StreamingHttpResponse(gen(), content_type="text/event-stream; charset=utf-8")
         resp["Cache-Control"] = "no-cache, no-transform"

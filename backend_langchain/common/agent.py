@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import logging
 import os
 import sqlite3
 import sys
@@ -25,6 +26,8 @@ from config.config import get_qwen_chat_model
 from Langchain_Agent.utils.answer_format_prompt import wrap_user_message_for_agent
 from Langchain_Agent.tools import get_all_agent_tools
 from common.skill_router import build_agent_skill_context, build_interview_skill_context
+
+logger = logging.getLogger(__name__)
 
 _agent_graph_cache: CompiledStateGraph | None = None
 _agent_graph_stream_cache: CompiledStateGraph | None = None
@@ -280,8 +283,14 @@ def invoke_agent_with_stream_callbacks(
     thread_id: str,
     memory_context: str = "",
     temperature: float = 0.45,
+    trace_cb: Optional[Callable[[str], None]] = None,
 ) -> str:
     """RAG + 工具；LLM 侧开启流式；callbacks 可接收 on_llm_new_token。多轮记忆由 LangGraph checkpoint + thread_id 承载。"""
+    if trace_cb:
+        try:
+            trace_cb("agent_invoke_enter")
+        except Exception:
+            logger.debug("trace_cb(agent_invoke_enter) failed", exc_info=True)
     agent = get_cached_agent_executor(temperature=temperature, streaming=True)
     skill_context = build_agent_skill_context(user_input)
     prompt = wrap_user_message_for_agent(
@@ -289,12 +298,19 @@ def invoke_agent_with_stream_callbacks(
         memory_context=memory_context,
         skill_context=skill_context,
     )
-    out = _invoke_agent_sync(
-        agent,
-        prompt,
-        config={"callbacks": list(callbacks)},
-        thread_id=thread_id,
-    )
+    try:
+        out = _invoke_agent_sync(
+            agent,
+            prompt,
+            config={"callbacks": list(callbacks)},
+            thread_id=thread_id,
+        )
+    finally:
+        if trace_cb:
+            try:
+                trace_cb("agent_invoke_exit")
+            except Exception:
+                logger.debug("trace_cb(agent_invoke_exit) failed", exc_info=True)
     return out.get("output") if isinstance(out, dict) else str(out)
 
 
