@@ -116,44 +116,77 @@ def _int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
     return max(minimum, min(value, maximum))
 
 
-class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
-    """
-    ReAct 每轮 LLM（Thought/Action/Observation）都会触发 on_llm_new_token；
-    缓冲全文，仅在检测到「Final Answer:」之后，才把后续增量写入队列，避免思考与工具行泄露。
+# --- 自然语言优先 + <tool> 隐式调用：流式剥标签，不透出 Thought/Action/Observation ---
+_TOOL_BLOCK_RE = re.compile(
+    r"<tool\s+name\s*=\s*[\"']([^\"']+)[\"']\s*>(.*?)</tool>",
+    re.DOTALL | re.IGNORECASE,
+)
+_REACT_LINE_ONLY_RE = re.compile(
+    r"(?m)^\s*(?:Question|Thought|Action|Action Input|Observation)\s*(?::|：).*$",
+    re.IGNORECASE,
+)
+_INLINE_FA_STRIP_RE = re.compile(
+    r"(?:^|\n)\s*\*{0,2}Final Answer\*{0,2}\s*(?::|：)\s*",
+    re.IGNORECASE | re.MULTILINE,
+)
 
-    正文内若再次出现「Final Answer:」字面量：硬截断（不再入队后续 token），并保留尾部 holdback，
-    避免流式分片在凑齐正则前把「\\n\\nFinal」误发给前端。
+
+def _strip_tool_blocks_and_incomplete(raw: str) -> str:
+    """去掉完整 <tool>...</tool>；尾部未闭合的 <tool… 与孤悬的 `<` 不输出。"""
+    s = _TOOL_BLOCK_RE.sub("", raw)
+    m = re.search(r"<tool[^>]*$", s, re.IGNORECASE)
+    if m:
+        s = s[: m.start()]
+    s = re.sub(r"<\s*$", "", s)
+    return s
+
+
+def _inline_visible_clean(raw: str) -> str:
+    s = _strip_tool_blocks_and_incomplete(raw)
+    s = _REACT_LINE_ONLY_RE.sub("", s)
+    s = _INLINE_FA_STRIP_RE.sub("", s)
+    return s
+
+
+def user_visible_reply_inline(full_agent_output: str) -> str:
+    """落库用：与流式 handler 规则一致，剥工具标签与 ReAct 行。"""
+    s = (full_agent_output or "").strip()
+    if not s:
+        return ""
+    return _inline_visible_clean(s).strip()
+
+
+class _NaturalLanguageToolFilterHandler(BaseCallbackHandler):
+    """
+    自然语言先流式可见；<tool>...</tool> 与 Thought/Action/Observation 行不进入队列。
+    多轮工具：每轮 on_llm_start 重置本轮缓冲，on_llm_end 将本轮可见正文拼入 _session_visible。
     """
 
-    # 过小易把「Final Answer」拆片误发；过大则正文会像「攒一大段才推」——体感像非流式
-    _HOLDBACK = 16
-    # 单次可见增量再切片后发送（控制 delta 粗细度）
     _DELTA_CHUNK_CHARS = _int_env(
         "SSE_DELTA_CHUNK_CHARS",
         164,
         minimum=12,
         maximum=256,
     )
-    # 累积到该阈值才发送；默认略低以缩短首包可见延迟（仍可用 SSE_DELTA_MIN_EMIT_CHARS 调高减请求次数）。
     _DELTA_MIN_EMIT_CHARS = _int_env(
         "SSE_DELTA_MIN_EMIT_CHARS",
-        24,
-        minimum=8,
+        12,
+        minimum=4,
         maximum=128,
     )
 
     def __init__(self, q: Queue, trace_cb: Optional[Callable[[str], None]] = None) -> None:
         self._q = q
         self._trace_cb = trace_cb
-        self._buf = ""
-        self._fa_end: Optional[int] = None
-        self._sent_tail_len = 0
-        self._stopped = False
-        self._stream_closed = False
+        self._round_raw = ""
+        self._vis_consumed = ""
         self._emit_buf = ""
+        self._session_visible = ""
         self._first_token_traced = False
-        self._final_answer_hit_traced = False
         self._first_delta_traced = False
+
+    def final_user_visible(self) -> str:
+        return (self._session_visible or "").strip()
 
     def _trace(self, event: str) -> None:
         if not self._trace_cb:
@@ -161,15 +194,9 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
         try:
             self._trace_cb(event)
         except Exception:
-            # 埋点不能影响主流程
             return
 
     def _flush_emit_buffer(self, *, force: bool = False) -> None:
-        """
-        将 _emit_buf 分块推送到队列：
-        - 非 force：至少达到 _DELTA_MIN_EMIT_CHARS 才发，优先在标点/空白处断开
-        - force：收尾阶段把剩余内容全部发完
-        """
         if not self._emit_buf:
             return
         split_chars = set("，。！？；：,.!?;:\n\t ")
@@ -181,9 +208,7 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
                     self._q.put(self._emit_buf)
                     self._emit_buf = ""
                 return
-
             cut = self._DELTA_CHUNK_CHARS
-            # 让切分尽量自然：在 chunk 末尾附近优先寻找标点/空白
             for i in range(self._DELTA_CHUNK_CHARS - 1, self._DELTA_MIN_EMIT_CHARS - 1, -1):
                 if self._emit_buf[i] in split_chars:
                     cut = i + 1
@@ -193,93 +218,45 @@ class _FinalAnswerOnlyTokenHandler(BaseCallbackHandler):
             self._emit_buf = self._emit_buf[cut:]
 
     def on_llm_start(self, serialized: Any, prompts: Any, *, run_id: UUID, **kwargs: Any) -> None:
-        """每轮 LLM 完成（含 LangGraph create_agent 多轮 tool调用）单独流式；清空缓冲，只推本轮正文。"""
-        self._stream_closed = False
-        self._buf = ""
-        self._fa_end = None
-        self._sent_tail_len = 0
-        self._stopped = False
+        self._round_raw = ""
+        self._vis_consumed = ""
         self._emit_buf = ""
-        self._first_token_traced = False
-        self._final_answer_hit_traced = False
-        self._first_delta_traced = False
 
     def on_llm_end(self, response: Any, **kwargs: Any) -> None:
-        """单次 LLM 生成结束：刷出 holdback。无 Final Answer 标记时（原生 tool calling 末轮常见）按全文可见处理。"""
-        self._stream_closed = True
-        if self._fa_end is None and self._buf.strip():
-            visible = _user_visible_reply(self._buf)
-            if visible:
-                self._fa_end = 0
-                self._buf = visible
-        self._flush_deltas()
+        vis = _inline_visible_clean(self._round_raw)
+        if not vis.startswith(self._vis_consumed):
+            self._vis_consumed = ""
+        delta = vis[len(self._vis_consumed) :]
+        if delta:
+            if not self._first_delta_traced:
+                self._first_delta_traced = True
+                self._trace("first_delta")
+            self._emit_buf += delta
+        self._vis_consumed = vis
         self._flush_emit_buffer(force=True)
+        if vis.strip():
+            if self._session_visible.strip():
+                self._session_visible += "\n\n"
+            self._session_visible += vis
 
     def on_llm_new_token(self, token: str, *, run_id: UUID, **kwargs: Any) -> None:
-        if self._stopped:
-            return
         if not token:
             return
         if not self._first_token_traced:
             self._first_token_traced = True
             self._trace("first_token")
-        self._buf += token
-        if self._fa_end is None:
-            m = _FINAL_ANSWER_SPLIT_RE.search(self._buf)
-            if m:
-                self._fa_end = m.end()
-                if not self._final_answer_hit_traced:
-                    self._final_answer_hit_traced = True
-                    self._trace("final_answer_hit")
-            else:
-                m2 = _FINAL_ANSWER_START_RE.match(self._buf)
-                if m2:
-                    self._fa_end = m2.end()
-                    if not self._final_answer_hit_traced:
-                        self._final_answer_hit_traced = True
-                        self._trace("final_answer_hit")
-                else:
-                    return
-        self._flush_deltas()
-
-    def _flush_deltas(self) -> None:
-        if self._stopped:
+        self._round_raw += token
+        vis = _inline_visible_clean(self._round_raw)
+        if not vis.startswith(self._vis_consumed):
+            self._vis_consumed = ""
+        delta = vis[len(self._vis_consumed) :]
+        if not delta:
             return
-        if self._fa_end is None:
-            return
+        if not self._first_delta_traced:
+            self._first_delta_traced = True
+            self._trace("first_delta")
+        self._vis_consumed = vis
+        self._emit_buf += delta
+        self._flush_emit_buffer(force=False)
 
-        raw_tail = self._buf[self._fa_end :]
-        m_dup = _INLINE_DUP_FINAL_ANSWER_LABEL.search(raw_tail)
-        if m_dup:
-            clipped = raw_tail[: m_dup.start()].rstrip()
-            self._stopped = True
-            self._buf = self._buf[: self._fa_end + len(clipped)]
-            tail = clipped
-        else:
-            tail = _strip_duplicate_final_answer_labels_in_body(raw_tail)
 
-        tail_before_react = tail
-        tail = _strip_repeated_react_after_final(tail)
-        if len(tail) < len(tail_before_react):
-            self._buf = self._buf[: self._fa_end + len(tail)]
-
-        if self._sent_tail_len > len(tail):
-            self._sent_tail_len = len(tail)
-
-        use_holdback = not self._stopped and not self._stream_closed
-        if use_holdback and len(tail) > self._HOLDBACK:
-            safe_len = len(tail) - self._HOLDBACK
-        else:
-            safe_len = len(tail)
-
-        new_part = tail[self._sent_tail_len : safe_len]
-        if new_part:
-            if not self._first_delta_traced:
-                self._first_delta_traced = True
-                self._trace("first_delta")
-            self._emit_buf += new_part
-            self._flush_emit_buffer(force=self._stream_closed or self._stopped)
-        self._sent_tail_len = safe_len
-        # 已硬截断：立即通知 SSE 消费端结束 delta 等待，不必等 invoke() 收尾（否则会长时间只有 ping）
-        if self._stopped:
-            self._q.put(_TOKEN_STREAM_END)

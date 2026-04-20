@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from difflib import SequenceMatcher
 from typing import Any, Callable
 
 from django.db import close_old_connections
@@ -18,12 +19,116 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MIRROR = "https://hf-mirror.com"
 _TITLE_MAX_LEN = 30
+_GREETING_QUICK_REPLIES = {
+    "在吗": "在吗",
+    "在不在": "在不在",
+    "有人吗": "有人吗",
+    "在嘛": "在嘛",
+    "在么": "在么",
+    "你好": "你好",
+    "您好": "您好",
+    "嗨": "嗨",
+    "哈喽": "哈喽",
+    "哈啰": "哈啰",
+    "早上好": "早上好",
+    "中午好": "中午好",
+    "下午好": "下午好",
+    "晚上好": "晚上好",
+    "hi": "hi",
+    "hey": "hey",
+    "yo": "yo",
+    "hello": "hello",
+    "good morning": "good morning",
+    "good afternoon": "good afternoon",
+    "good evening": "good evening",
+}
+_CAPABILITY_QUICK_INPUTS = {
+    "你能做什么",
+    "你会什么",
+    "你会做什么",
+    "你可以做什么",
+    "你可以帮我做什么",
+    "你能帮我做什么",
+    "你可以帮我什么",
+    "你能帮我什么",
+    "你有什么功能",
+    "你有哪些功能",
+    "你都能干啥",
+    "你都能做啥",
+    "你可以帮我干啥",
+    "你能帮我干啥",
+    "what can you do",
+}
+_QUICK_ROUTE_FUZZY_CANDIDATES = tuple(_GREETING_QUICK_REPLIES.keys()) + tuple(
+    _CAPABILITY_QUICK_INPUTS
+)
+_FUZZY_MIN_SIM = 0.78
 
 
 def fallback_chat_title(message: str) -> str:
     """新会话占位标题：取用户首条消息前 20 字；异步润色前写入库。"""
     t = (message[:20] or "新对话").strip()
     return t if t else "新对话"
+
+
+def _quick_greeting_hit(message: str) -> str | None:
+    text = (message or "").strip().lower()
+    if not text:
+        return None
+    normalized = text.strip("。！？!?，,~～ ")
+    if len(normalized) > 20:
+        return None
+    if normalized in _CAPABILITY_QUICK_INPUTS:
+        return normalized
+    exact = _GREETING_QUICK_REPLIES.get(normalized)
+    if exact:
+        return exact
+
+    # 轻量模糊匹配：仅在短句场景启用，避免关键词稍有变体就 miss。
+    best_text: str | None = None
+    best_score = 0.0
+    for cand in _QUICK_ROUTE_FUZZY_CANDIDATES:
+        score = SequenceMatcher(None, normalized, cand).ratio()
+        if score > best_score:
+            best_score = score
+            best_text = cand
+    if best_text and best_score >= _FUZZY_MIN_SIM:
+        return normalized
+    return None
+
+
+def quick_agent_greeting_prompt(message: str) -> str | None:
+    """AI 编程助手：问候/短句快速路径提示词（不走 ReAct）。"""
+    hit = _quick_greeting_hit(message)
+    if not hit:
+        return None
+    return (
+        "你是温暖、专业的 AI 助手。用户刚发来一条问候，请直接自然回复。\n"
+        "要求：\n"
+        "1) 先简短接住问候（1 句）；\n"
+        "2) 再用 1-2 句告诉用户你能做什么（重点：代码报错排查、代码改造、性能优化、方案对比、技术问答）；\n"
+        "3) 末尾给一个自然的引导句，鼓励用户直接贴问题/代码/报错；\n"
+        "4) 不要使用 ReAct 结构，不要输出 Thought/Action/Observation/Final Answer；\n"
+        "5) 每次表达尽量有变化，口语化，控制在 80 字以内。\n\n"
+        f"用户消息：{hit}"
+    )
+
+
+def quick_interview_greeting_prompt(message: str) -> str | None:
+    """AI 面试助手：问候/短句快速路径提示词（不走 ReAct）。"""
+    hit = _quick_greeting_hit(message)
+    if not hit:
+        return None
+    return (
+        "你是温暖、专业的 AI 面试助手。用户刚发来一条问候，请直接自然回复。\n"
+        "要求：\n"
+        "1) 先简短接住问候（1 句）；\n"
+        "2) 再用 1-2 句告诉用户你能做什么（重点：面试题讲解、模拟面试追问、答题优化、学习路线）；\n"
+        "3) 末尾给一个自然的引导句，鼓励用户直接发岗位/题目/答案让你优化；\n"
+        "4) 不要使用 ReAct 结构，不要输出 Thought/Action/Observation/Final Answer；\n"
+        "5) 每次表达尽量有变化，口语化，控制在 80 字以内。\n\n"
+        f"用户消息：{hit}"
+    )
 
 
 def _normalize_llm_title_line(resp: Any, *, fallback: str) -> str:

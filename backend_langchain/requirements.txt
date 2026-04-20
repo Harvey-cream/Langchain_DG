@@ -26,12 +26,15 @@ langgraph-checkpoint-sqlite>=2.0.10,<3.0
 langchain-mcp-adapters>=0.2.2,<0.3
 mcp>=1.9.2,<2
 langsmith>=0.1.17
+# Chroma 向量库：langchain_community 中 Chroma 已弃用，使用官方 partner 包
+langchain-chroma>=1.0.0,<2.0
 # RAG 读本地 Chroma 目录；检索时嵌入由 API 提供（生产）或本地 HF（开发，见 requirements-dev）
-chromadb==0.4.24
-# chromadb 0.4.x 依赖 numpy 1.x API（np.float_）；与 numpy 2.x 不兼容
-numpy>=1.26.0,<2.0
-# 与 chromadb==0.4.24 的 telemetry 接口保持兼容，避免 posthog 7.x capture 签名不兼容
+# langchain-chroma 1.x 要求 chromadb>=1.3.5（与旧版 0.4.x 不兼容）。
+# 若升级后打开旧 persist 目录报错，请重新运行 Scripts/build_md_knowledge.py / build_knowledge.py 重建向量库。
+chromadb>=1.3.5,<2.0
+numpy>=1.26.0,<3.0
 posthog>=2.4.0,<6.0
 python-dotenv
 PyYAML>=6.0.1,<7.0
 dashscope>=1.19.0
+aiosqlite>=0.20.0,<1.0

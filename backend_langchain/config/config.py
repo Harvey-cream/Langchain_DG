@@ -25,7 +25,7 @@ LLM_AGENT_MODEL = os.getenv("LLM_AGENT_MODEL", "gpt-5.4").strip()
 
 class _AgentStreamChatOpenAI(ChatOpenAI):
     """
-    流式输出必须走 OpenAI 的 stream=True，才会触发 on_llm_new_token（配合 common.SSE 只推 Final Answer 后正文）。
+    流式输出必须走 OpenAI 的 stream=True，模型侧才有逐块输出（LangGraph 下由 graph.stream(stream_mode="messages") 消费）。
 
     - BaseChatModel._generate_with_cache：需在 kwargs 里带 stream=True 才会走 _stream 循环。
     - ChatOpenAI._generate：若上层显式传入 stream=False，会覆盖 self.streaming，整段返回、体感像非流式。

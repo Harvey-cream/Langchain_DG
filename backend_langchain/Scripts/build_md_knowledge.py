@@ -4,8 +4,9 @@
 默认：四套文档目录 → 四个独立 persist 目录（同 collection 名，靠路径隔离）。
 自定义：--docs-dirs + --chroma-dir 合并进一个库。
 
-下载 embedding 模型：默认通过 common.extend 设置 HF_ENDPOINT=https://hf-mirror.com（国内镜像）。
-已在环境或 .env 中配置 HF_ENDPOINT 时不会被覆盖；需要直连官方可加参数 --no-hf-mirror。
+下载 embedding 前请在 shell 中设置 HF_ENDPOINT（或写入 .env），例如国内镜像：
+  PowerShell: $env:HF_ENDPOINT="https://hf-mirror.com"
+huggingface_hub 在首次 import 时固定 ENDPOINT，须在启动 python 进程之前设置好。
 """
 from __future__ import annotations
 
@@ -21,11 +22,13 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from dotenv import load_dotenv
-from common.extend import apply_hf_mirror_default
+
+load_dotenv()
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 _HTML_IMG_RE = re.compile(r"<img\s+[^>]*>", flags=re.IGNORECASE)
@@ -33,10 +36,10 @@ _CHROMA_PAGE = 5000
 
 # (key, docs 相对 backend_langchain, chroma 子目录相对 Langchain_knowledge/chroma_db)
 DEFAULT_BASES: tuple[tuple[str, str, str], ...] = (
-    ("ai_programming", "Langchain_knowledge/docs/AI编程工具与实战", "AI_programming"),
-    ("openclaw", "Langchain_knowledge/docs/OpenClaw 保姆级教程", "Openclaw"),
-    ("vibecoding", "Langchain_knowledge/docs/Vibe Coding 零基础教程", "Vibecoding"),
-    ("learn_programing", "Langchain_knowledge/docs/编程学习路线与面试", "Learn_programing"),
+    ("ai_programming", "Langchain_knowledge/docs1/AI编程工具与实战", "AI_programming"),
+    ("openclaw", "Langchain_knowledge/docs1/OpenClaw 保姆级教程", "Openclaw"),
+    ("vibecoding", "Langchain_knowledge/docs1/Vibe Coding 零基础教程", "Vibecoding"),
+    ("learn_programing", "Langchain_knowledge/docs1/编程学习路线与面试", "Learn_programing"),
 )
 
 
@@ -203,7 +206,9 @@ def build_md_knowledge(
             collection_name=collection,
             persist_directory=str(chroma_dir),
         )
-    db.persist()
+    persist_fn = getattr(db, "persist", None)
+    if callable(persist_fn):
+        persist_fn()
     print(f"[完成] {chroma_dir} | collection={collection} | model={model_ref}")
 
 
@@ -217,21 +222,12 @@ def main() -> None:
     p.add_argument("--embedding-model", default="BAAI/bge-small-zh-v1.5")
     p.add_argument("--hf-cache-dir", default=None)
     p.add_argument("--local-only", action="store_true")
-    p.add_argument(
-        "--no-hf-mirror",
-        action="store_true",
-        help="不设置默认 HF 镜像（仍可使用环境变量 HF_ENDPOINT 自行指定）",
-    )
     p.add_argument("--chunk-size", type=int, default=1000)
     p.add_argument("--chunk-overlap", type=int, default=150)
     p.add_argument("--no-strip-images", action="store_true")
     p.add_argument("--max-files", type=int, default=None)
     p.add_argument("--append", action="store_true")
     args = p.parse_args()
-    if args.no_hf_mirror:
-        os.environ.pop("HF_ENDPOINT", None)
-    else:
-        apply_hf_mirror_default()
 
     base = Path(__file__).resolve().parent.parent
     kw = dict(

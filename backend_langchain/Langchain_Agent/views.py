@@ -8,7 +8,12 @@ import time
 from uuid import uuid4
 from typing import List, Dict, Any, Iterator
 
-from common.SSE import _sse_bytes, _user_visible_reply, _TOKEN_STREAM_END, _FinalAnswerOnlyTokenHandler
+from common.SSE import (
+    _sse_bytes,
+    _user_visible_reply,
+    _TOKEN_STREAM_END,
+    user_visible_reply_inline,
+)
 
 from django.db import close_old_connections
 from django.http import StreamingHttpResponse, JsonResponse
@@ -21,14 +26,12 @@ from User.utils.user_utils import get_current_user
 from common_web.response_web import HttpResult
 from common_web.utils import format_datetime
 from django.utils import timezone
-from common.agent import (
-    agent_checkpoint_thread_id,
-    chat as agent_chat,
-    invoke_agent_with_stream_callbacks,
-)
+from common.agent import agent_checkpoint_thread_id, chat as agent_chat
+from common.Queue import run_chat_stream_with_queue
 from common.extend import (
     fallback_chat_title,
     polish_agent_conversation_title,
+    quick_agent_greeting_prompt,
     schedule_async_title_polish,
 )
 
@@ -277,18 +280,18 @@ class ChatStreamView(APIView):
 
             def run_agent() -> None:
                 close_old_connections()
-                # 与 AppConfig 启动预热相同；若后台线程尚未跑完，此处再拉一次（幂等）
-                try:
-                    from .tools import warmup_rag_singletons
+                # 问候/能力短句快路径不调 RAG：跳过 Chroma+嵌入预热，避免十几秒只 ping 无 delta
+                if not quick_agent_greeting_prompt(msg_text):
+                    try:
+                        from .tools import warmup_rag_singletons
 
-                    warmup_rag_singletons()
-                except Exception:
-                    logger.exception("chat_stream: warmup_rag_singletons failed")
-                handler = _FinalAnswerOnlyTokenHandler(token_q, trace_cb=trace_event)
+                        warmup_rag_singletons()
+                    except Exception:
+                        logger.exception("chat_stream: warmup_rag_singletons failed")
                 try:
-                    reply = invoke_agent_with_stream_callbacks(
+                    reply = run_chat_stream_with_queue(
                         msg_text,
-                        [handler],
+                        token_q,
                         thread_id=thread_id,
                         trace_cb=trace_event,
                     )
@@ -324,8 +327,13 @@ class ChatStreamView(APIView):
                 if item is _TOKEN_STREAM_END:
                     got_token_end = True
                     break
-                tokens_received += 1
-                yield _sse_bytes({"type": "delta", "text": item})
+                if isinstance(item, dict):
+                    t = item.get("type")
+                    if t == "status" and item.get("text") is not None:
+                        yield _sse_bytes({"type": "status", "text": item["text"]})
+                    elif t == "delta" and item.get("text") is not None:
+                        tokens_received += 1
+                        yield _sse_bytes({"type": "delta", "text": item["text"]})
 
             stream_done_sent = False
             if got_token_end and tokens_received:
@@ -372,7 +380,11 @@ class ChatStreamView(APIView):
                 return
 
             reply = str(payload)
-            stored = _user_visible_reply(reply)
+            stored = (
+                user_visible_reply_inline(reply).strip()
+                or _user_visible_reply(reply).strip()
+                or reply.strip()
+            )
             session_obj.ai_response = stored
             session_obj.save()
             conversation.save()

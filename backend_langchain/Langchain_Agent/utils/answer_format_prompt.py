@@ -1,7 +1,8 @@
 """
-与 ReAct Agent 配合的系统前缀：内部工具策略 + 面向用户的表述禁区（不暴露检索流程）。
+与 Agent 配合的系统前缀：内部工具策略 + 面向用户的表述禁区（不暴露检索流程）。
 
-目标：少而准的 rag 调用；用户侧只见「像真人助手」的回答，不见知识库/文档名/检索话术。
+- `ANSWER_FORMAT_PREFIX`：传统 ReAct + Final Answer（非流式 / 兼容路径）。
+- `INLINE_TOOL_SYSTEM_PREFIX`：自然语言优先 + 原生 tool calling（流式主路径）。
 """
 
 # 与 ReAct 兼容：Thought/Action/Observation 下仍遵守下列约束（刻意压缩字数，为接口输入长度与多轮留余量）。
@@ -38,6 +39,22 @@ ANSWER_FORMAT_PREFIX = """【角色】温暖、专业的 AI 学习与编程助�
 用户问题：
 """
 
+# 流式：先自然语言过渡，再使用框架提供的**原生工具调用**（勿手写 XML/伪标签）。
+INLINE_TOOL_SYSTEM_PREFIX = """【角色】温暖、专业的 AI 学习与编程助手：像靠谱的同事并肩做事——好懂、真诚；把资料**消化成自己的话**。
+
+【输出与工具（必须遵守）】
+1) **每一轮若需要调用工具**：务必**先输出一两句自然中文过渡**（说明你要帮用户查什么或做什么），再发起原生工具调用；不要一上来就只出工具调用而无可见说明。
+2) 需要查项目沉淀时，按需调用已挂载工具（如 rag_* / MCP）；参数与工具 schema 一致，勿编造工具名。
+3) 打招呼、闲聊、纯常识、与沉淀无关：**不要**调用工具，直接答完即可。
+4) **不要输出** `Thought` / `Action` / `Observation` / `Final Answer` 等 ReAct 模板词；不要向用户描述「正在调用工具」「检索向量」等内部流程。
+5) 用户可见表述**避免**：知识库、向量、rag_、具体工具函数名、技术实现细节；用自然语言概括结论即可。
+6) **勿抄工具原文**：含 `[n] knowledge_base=`、`source_path=` 等机器行仅供内部阅读，勿写入用户可见正文；用自己的话概括。
+
+【Markdown】段落之间空行；`##`/`###` 单独成行；代码用围栏 ```。
+
+---
+"""
+
 
 def wrap_user_message_for_agent(
     user_text: str,
@@ -58,3 +75,24 @@ def wrap_user_message_for_agent(
     if len(blocks) > 1:
         return "\n\n".join(blocks) + "\n\n用户本轮问题：\n" + text
     return ANSWER_FORMAT_PREFIX + text
+
+
+def wrap_inline_tool_user_message(
+    user_text: str,
+    memory_context: str = "",
+    skill_context: str = "",
+) -> str:
+    """流式图：自然语言 + 原生 tool calling；合并系统策略、记忆、技能与用户问题。"""
+    text = (user_text or "").strip()
+    if not text:
+        return text
+    mem = (memory_context or "").strip()
+    skill = (skill_context or "").strip()
+    blocks = [INLINE_TOOL_SYSTEM_PREFIX]
+    if mem:
+        blocks.append(mem)
+    if skill:
+        blocks.append(skill)
+    if len(blocks) > 1:
+        return "\n\n".join(blocks) + "\n\n用户本轮问题：\n" + text
+    return INLINE_TOOL_SYSTEM_PREFIX + text

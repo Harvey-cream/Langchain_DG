@@ -2,12 +2,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import sqlite3
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
-from typing import Callable, Optional, Sequence, Any
+from typing import Any, Callable, Iterator, Optional, Sequence
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
@@ -25,22 +26,20 @@ if __package__ in {None, ""}:
 from config.config import get_qwen_chat_model
 from Langchain_Agent.utils.answer_format_prompt import wrap_user_message_for_agent
 from Langchain_Agent.tools import get_all_agent_tools
-from common.skill_router import build_agent_skill_context, build_interview_skill_context
 
 logger = logging.getLogger(__name__)
-
-_agent_graph_cache: CompiledStateGraph | None = None
-_agent_graph_stream_cache: CompiledStateGraph | None = None
-
-# 面试大师：三套 rag 工具 + 统一 prompt，与非流式/流式各一份缓存
-_interview_agent_graph_cache: CompiledStateGraph | None = None
-_interview_agent_graph_stream_cache: CompiledStateGraph | None = None
 
 CHECKPOINT_SQLITE_PATH = (
     Path(__file__).resolve().parent / "data" / "langgraph_checkpoints.sqlite3"
 )
 _sqlite_checkpointer: SqliteSaver | None = None
 _sqlite_checkpointer_lock = threading.Lock()
+
+
+# =============================================================================
+# 公共：检查点、线程 id、消息解析、invoke 结果规整、图配置与步数上限
+# （流式与非流式共用，不区分 stream / invoke）
+# =============================================================================
 
 
 def get_sqlite_checkpointer() -> SqliteSaver:
@@ -66,33 +65,6 @@ def agent_checkpoint_thread_id(user_id: int, conversation_id: int) -> str:
 
 def interview_checkpoint_thread_id(user_id: int, conversation_id: int) -> str:
     return f"interview:{user_id}:{conversation_id}"
-
-
-def _graph_recursion_limit() -> int:
-    """封顶 LangGraph 图步数；默认由 AGENT_MAX_ITERATIONS 推导（每轮约 model + tool，系数保守）。"""
-    raw = os.getenv("AGENT_RECURSION_LIMIT", "").strip()
-    if raw:
-        try:
-            return max(4, int(raw))
-        except ValueError:
-            pass
-    n = _agent_max_iterations()
-    # 系数略小于「每轮 4 步」：避免默认 n 较大时总步数体感过长；需更长可设 AGENT_RECURSION_LIMIT
-    return max(14, n * 3 + 4)
-
-
-def _merge_graph_config(
-    base: dict[str, Any] | None,
-    *,
-    thread_id: str | None = None,
-) -> dict[str, Any]:
-    cfg: dict[str, Any] = dict(base or {})
-    cfg.setdefault("recursion_limit", _graph_recursion_limit())
-    if thread_id is not None:
-        conf = dict(cfg.get("configurable") or {})
-        conf["thread_id"] = thread_id
-        cfg["configurable"] = conf
-    return cfg
 
 
 def _message_content_to_text(content: Any) -> str:
@@ -136,6 +108,145 @@ def _normalize_agent_result(result: Any) -> dict[str, Any]:
     return {"output": _last_ai_text_from_agent_result(result)}
 
 
+def _agent_max_iterations() -> int:
+    """语义上的「工具/推理轮次」习惯上限，仅用于换算 recursion_limit；默认偏紧，可调环境变量。"""
+    raw = os.getenv("AGENT_MAX_ITERATIONS", "6")
+    try:
+        n = int(raw.strip())
+    except ValueError:
+        return 6
+    return max(1, min(n, 8))
+
+
+def _graph_recursion_limit() -> int:
+    """封顶 LangGraph 图步数；默认由 AGENT_MAX_ITERATIONS 推导（每轮约 model + tool，系数保守）。"""
+    raw = os.getenv("AGENT_RECURSION_LIMIT", "").strip()
+    if raw:
+        try:
+            return max(4, int(raw))
+        except ValueError:
+            pass
+    n = _agent_max_iterations()
+    # 系数略小于「每轮 4 步」：避免默认 n 较大时总步数体感过长；需更长可设 AGENT_RECURSION_LIMIT
+    return max(14, n * 3 + 4)
+
+
+def _merge_graph_config(
+    base: dict[str, Any] | None,
+    *,
+    thread_id: str | None = None,
+) -> dict[str, Any]:
+    cfg: dict[str, Any] = dict(base or {})
+    cfg.setdefault("recursion_limit", _graph_recursion_limit())
+    if thread_id is not None:
+        conf = dict(cfg.get("configurable") or {})
+        conf["thread_id"] = thread_id
+        cfg["configurable"] = conf
+    return cfg
+
+
+# =============================================================================
+# 公共：LangGraph 构图（streaming 由参数区分；具体 chat/stream 在各自 app 模块）
+# =============================================================================
+
+
+def build_react_rag_agent(
+    *,
+    tools: Optional[Sequence[Any]] = None,
+    temperature: float = 0.45,
+    verbose: bool = False,
+    streaming: bool = False,
+) -> CompiledStateGraph:
+    """
+    LangChain 1.x：create_agent（内置 LangGraph）。
+    多参数工具走模型原生 tool calling，与 MCP/RAG 兼容。
+    检查点统一用同步 SqliteSaver；流式走 graph.stream(stream_mode="messages")，勿用 astream_events（会要求异步 checkpointer）。
+    """
+    llm = get_qwen_chat_model(temperature=temperature, streaming=streaming)
+
+    if tools is None:
+        tools = list(get_all_agent_tools())
+
+    tools_list = list(tools)
+    checkpointer = get_sqlite_checkpointer()
+
+    return create_agent(
+        llm,
+        tools_list,
+        system_prompt=None,
+        debug=verbose,
+        checkpointer=checkpointer,
+    )
+
+
+# =============================================================================
+# 流式：graph.stream(stream_mode="messages") 增量输出（SSE / Queue 使用 app 内 stream_*）
+# =============================================================================
+
+
+# 旧版工具曾返回 [n] knowledge_base=… 行；流式里再剥一层，防模型照抄或历史 checkpoint
+_RAG_LEGACY_LINE = re.compile(r"\[\d+\]\s*knowledge_base=[^\n]*\n?", re.MULTILINE)
+_SOURCE_LINE = re.compile(r"^\s*#?\s*Source:\s*.+$", re.MULTILINE)
+
+
+def _strip_rag_echo_for_stream(text: str) -> str:
+    if not (text or "").strip():
+        return text
+    s = _RAG_LEGACY_LINE.sub("", text)
+    s = _SOURCE_LINE.sub("", s)
+    return s
+
+
+def _chunk_has_tool_calls(chunk: Any) -> bool:
+    tc = getattr(chunk, "tool_calls", None)
+    if tc:
+        return True
+    tcc = getattr(chunk, "tool_call_chunks", None)
+    if tcc:
+        return True
+    add = getattr(chunk, "additional_kwargs", None) or {}
+    return bool(add.get("tool_calls"))
+
+
+def stream_graph_chat_model_events(
+    agent: CompiledStateGraph,
+    *,
+    prompt_text: str,
+    thread_id: str,
+) -> Iterator[dict[str, Any]]:
+    """
+    同步 stream(messages)：与 SqliteSaver + SyncPregelLoop 兼容。
+    astream_events 会走 checkpointer.aget_tuple，同步 SqliteSaver 未实现异步接口会报错。
+    """
+    input_state: dict[str, Any] = {"messages": [HumanMessage(content=prompt_text)]}
+    merged = _merge_graph_config(None, thread_id=thread_id)
+    in_tool = False
+    for item in agent.stream(
+        input_state,
+        merged,
+        stream_mode="messages",
+    ):
+        if not isinstance(item, tuple) or not item:
+            continue
+        chunk = item[0]
+        if _chunk_has_tool_calls(chunk):
+            if not in_tool:
+                yield {"type": "status", "text": "🔍 查询中"}
+                in_tool = True
+            continue
+        in_tool = False
+        piece = _message_content_to_text(getattr(chunk, "content", None))
+        if piece:
+            cleaned = _strip_rag_echo_for_stream(piece)
+            if cleaned:
+                yield {"type": "delta", "text": cleaned}
+
+
+# =============================================================================
+# 非流式：同步 invoke 一整轮（返回最终 output；用于 chat / chat_interview / cli）
+# =============================================================================
+
+
 def _invoke_agent_sync(
     agent: CompiledStateGraph,
     prompt_text: str,
@@ -176,14 +287,96 @@ def _invoke_agent_sync(
     )
 
 
-def _agent_max_iterations() -> int:
-    """语义上的「工具/推理轮次」习惯上限，仅用于换算 recursion_limit；默认偏紧，可调环境变量。"""
-    raw = os.getenv("AGENT_MAX_ITERATIONS", "6")
-    try:
-        n = int(raw.strip())
-    except ValueError:
-        return 6
-    return max(1, min(n, 8))
+# =============================================================================
+# 非流式：门面（委托 Langchain_Agent.main_agent / Langchain_Agent1.interview_agent）
+# =============================================================================
+
+
+def get_interview_agent_executor(
+    *,
+    temperature: float = 0.45,
+    streaming: bool = False,
+) -> CompiledStateGraph:
+    """面试大师执行器缓存（实现见 Langchain_Agent1.interview_agent）。"""
+    import Langchain_Agent1.interview_agent as interview_agent
+
+    return interview_agent.get_interview_agent_executor(
+        temperature=temperature, streaming=streaming
+    )
+
+
+def get_cached_agent_executor(
+    *, temperature: float = 0.45, streaming: bool = False
+) -> CompiledStateGraph:
+    """主智能体执行器缓存（实现见 Langchain_Agent.main_agent）。"""
+    import Langchain_Agent.main_agent as main_agent
+
+    return main_agent.get_cached_agent_executor(
+        temperature=temperature, streaming=streaming
+    )
+
+
+def warmup_agent_executors(*, temperature: float = 0.45) -> None:
+    """
+    进程启动时构建四套 CompiledStateGraph 单例（普通/面试 × 流式/非流式），
+    避免首个用户请求才加载 LLM 客户端与图。
+    """
+    import Langchain_Agent.main_agent as main_agent
+    import Langchain_Agent1.interview_agent as interview_agent
+
+    main_agent.get_cached_agent_executor(temperature=temperature, streaming=False)
+    main_agent.get_cached_agent_executor(temperature=temperature, streaming=True)
+    interview_agent.get_interview_agent_executor(
+        temperature=temperature, streaming=False
+    )
+    interview_agent.get_interview_agent_executor(
+        temperature=temperature, streaming=True
+    )
+
+
+def chat_interview(
+    user_input: str,
+    *,
+    thread_id: str,
+    memory_context: str = "",
+    temperature: float = 0.45,
+) -> str:
+    """面试大师：见 Langchain_Agent1.utils.prompt（实现见 Langchain_Agent1.interview_agent）。"""
+    import Langchain_Agent1.interview_agent as interview_agent
+
+    return interview_agent.chat_interview(
+        user_input,
+        thread_id=thread_id,
+        memory_context=memory_context,
+        temperature=temperature,
+    )
+
+
+def chat(
+    user_input: str,
+    *,
+    thread_id: str,
+    mcp_input_reader: Optional[Callable[[], str]] = None,
+    memory_context: str = "",
+    temperature: float = 0.45,
+) -> str:
+    """
+    框架入口：create_agent + 工具（RAG / MCP）（实现见 Langchain_Agent.main_agent）。
+
+    参数说明：
+    - `user_input`：最终喂给 agent 的文本
+    - `thread_id`：与 Django 会话对齐的 LangGraph 线程 id（见 agent_checkpoint_thread_id）
+    - `mcp_input_reader`：未来你可以传入 MCP 客户端来“读取用户输入”，此处默认不启用
+    """
+    import Langchain_Agent.main_agent as main_agent
+
+    return main_agent.chat(
+        user_input,
+        thread_id=thread_id,
+        mcp_input_reader=mcp_input_reader,
+        memory_context=memory_context,
+        temperature=temperature,
+    )
 
 
 def _default_mcp_input_reader(prompt: str = "User: ") -> str:
@@ -197,206 +390,6 @@ def _default_mcp_input_reader(prompt: str = "User: ") -> str:
     if injected:
         return injected
     return input(prompt)
-
-
-def build_react_rag_agent(
-    *,
-    tools: Optional[Sequence[Any]] = None,
-    temperature: float = 0.45,
-    verbose: bool = False,
-    streaming: bool = False,
-) -> CompiledStateGraph:
-    """
-    LangChain 1.x：create_agent（内置 LangGraph）。
-    多参数工具走模型原生 tool calling，与 MCP/RAG 兼容。
-    """
-    llm = get_qwen_chat_model(temperature=temperature, streaming=streaming)
-
-    if tools is None:
-        tools = list(get_all_agent_tools())
-
-    tools_list = list(tools)
-    return create_agent(
-        llm,
-        tools_list,
-        system_prompt=None,
-        debug=verbose,
-        checkpointer=get_sqlite_checkpointer(),
-    )
-
-
-def get_interview_agent_executor(
-    *,
-    temperature: float = 0.45,
-    streaming: bool = False,
-) -> CompiledStateGraph:
-    """面试大师：工具调用 + 三套面试向量库工具，由模型自行选用。"""
-    global _interview_agent_graph_cache, _interview_agent_graph_stream_cache
-    from Langchain_Agent1.tools import INTERVIEW_RAG_TOOLS
-
-    if streaming:
-        if _interview_agent_graph_stream_cache is None:
-            _interview_agent_graph_stream_cache = build_react_rag_agent(
-                tools=list(INTERVIEW_RAG_TOOLS), temperature=temperature, streaming=True
-            )
-        return _interview_agent_graph_stream_cache
-    if _interview_agent_graph_cache is None:
-        _interview_agent_graph_cache = build_react_rag_agent(
-            tools=list(INTERVIEW_RAG_TOOLS), temperature=temperature, streaming=False
-        )
-    return _interview_agent_graph_cache
-
-
-def get_cached_agent_executor(*, temperature: float = 0.45, streaming: bool = False) -> CompiledStateGraph:
-    """非流式用于普通 chat；streaming=True 使用独立缓存，千问以 token 流式输出。"""
-    global _agent_graph_cache, _agent_graph_stream_cache
-    if streaming:
-        if _agent_graph_stream_cache is None:
-            all_tools = list(get_all_agent_tools())
-            _agent_graph_stream_cache = build_react_rag_agent(
-                temperature=temperature, streaming=True, tools=all_tools
-            )
-        return _agent_graph_stream_cache
-    if _agent_graph_cache is None:
-        all_tools = list(get_all_agent_tools())
-        _agent_graph_cache = build_react_rag_agent(
-            temperature=temperature, streaming=False, tools=all_tools
-        )
-    return _agent_graph_cache
-
-
-def warmup_agent_executors(*, temperature: float = 0.45) -> None:
-    """
-    进程启动时构建四套 CompiledStateGraph 单例（普通/面试 × 流式/非流式），
-    避免首个用户请求才加载 LLM 客户端与图。
-    """
-    get_cached_agent_executor(temperature=temperature, streaming=False)
-    get_cached_agent_executor(temperature=temperature, streaming=True)
-    get_interview_agent_executor(temperature=temperature, streaming=False)
-    get_interview_agent_executor(temperature=temperature, streaming=True)
-
-
-def invoke_agent_with_stream_callbacks(
-    user_input: str,
-    callbacks: Sequence[Any],
-    *,
-    thread_id: str,
-    memory_context: str = "",
-    temperature: float = 0.45,
-    trace_cb: Optional[Callable[[str], None]] = None,
-) -> str:
-    """RAG + 工具；LLM 侧开启流式；callbacks 可接收 on_llm_new_token。多轮记忆由 LangGraph checkpoint + thread_id 承载。"""
-    if trace_cb:
-        try:
-            trace_cb("agent_invoke_enter")
-        except Exception:
-            logger.debug("trace_cb(agent_invoke_enter) failed", exc_info=True)
-    agent = get_cached_agent_executor(temperature=temperature, streaming=True)
-    skill_context = build_agent_skill_context(user_input)
-    prompt = wrap_user_message_for_agent(
-        user_input,
-        memory_context=memory_context,
-        skill_context=skill_context,
-    )
-    try:
-        out = _invoke_agent_sync(
-            agent,
-            prompt,
-            config={"callbacks": list(callbacks)},
-            thread_id=thread_id,
-        )
-    finally:
-        if trace_cb:
-            try:
-                trace_cb("agent_invoke_exit")
-            except Exception:
-                logger.debug("trace_cb(agent_invoke_exit) failed", exc_info=True)
-    return out.get("output") if isinstance(out, dict) else str(out)
-
-
-def chat_interview(
-    user_input: str,
-    *,
-    thread_id: str,
-    memory_context: str = "",
-    temperature: float = 0.45,
-) -> str:
-    """面试大师：见 Langchain_Agent1.utils.prompt。"""
-    from Langchain_Agent1.utils.prompt import wrap_interview_user_message
-
-    if not user_input.strip():
-        raise ValueError("user_input is empty")
-
-    agent = get_interview_agent_executor(temperature=temperature, streaming=False)
-    skill_context = build_interview_skill_context(user_input)
-    prompt = wrap_interview_user_message(
-        user_input,
-        memory_context=memory_context,
-        skill_context=skill_context,
-    )
-    out = _invoke_agent_sync(agent, prompt, thread_id=thread_id)
-    return out.get("output") if isinstance(out, dict) else str(out)
-
-
-def invoke_interview_agent_with_stream_callbacks(
-    user_input: str,
-    callbacks: Sequence[Any],
-    *,
-    thread_id: str,
-    memory_context: str = "",
-    temperature: float = 0.45,
-) -> str:
-    from Langchain_Agent1.utils.prompt import wrap_interview_user_message
-
-    agent = get_interview_agent_executor(temperature=temperature, streaming=True)
-    skill_context = build_interview_skill_context(user_input)
-    prompt = wrap_interview_user_message(
-        user_input,
-        memory_context=memory_context,
-        skill_context=skill_context,
-    )
-    out = _invoke_agent_sync(
-        agent,
-        prompt,
-        config={"callbacks": list(callbacks)},
-        thread_id=thread_id,
-    )
-    return out.get("output") if isinstance(out, dict) else str(out)
-
-
-def chat(
-    user_input: str,
-    *,
-    thread_id: str,
-    mcp_input_reader: Optional[Callable[[], str]] = None,
-    memory_context: str = "",
-    temperature: float = 0.45,
-) -> str:
-    """
-    框架入口：create_agent + 工具（RAG / MCP）。
-
-    参数说明：
-    - `user_input`：最终喂给 agent 的文本
-    - `thread_id`：与 Django 会话对齐的 LangGraph 线程 id（见 agent_checkpoint_thread_id）
-    - `mcp_input_reader`：未来你可以传入 MCP 客户端来“读取用户输入”，此处默认不启用
-    """
-
-    # 如果你想严格遵循“先 MCP 读入，再给 ReAct/RAG”，可以把 user_input 设为空并传 reader
-    if (not user_input or not user_input.strip()) and mcp_input_reader:
-        user_input = mcp_input_reader()
-
-    if not user_input.strip():
-        raise ValueError("user_input is empty")
-
-    agent = get_cached_agent_executor(temperature=temperature)
-    skill_context = build_agent_skill_context(user_input)
-    prompt = wrap_user_message_for_agent(
-        user_input,
-        memory_context=memory_context,
-        skill_context=skill_context,
-    )
-    out = _invoke_agent_sync(agent, prompt, thread_id=thread_id)
-    return out.get("output") if isinstance(out, dict) else str(out)
 
 
 def cli():

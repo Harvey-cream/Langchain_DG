@@ -17,6 +17,19 @@ const REACT_RESTART_AFTER_FINAL =
 const INLINE_DUP_FINAL_ANSWER =
   /(?:\n[\t ]*){1,2}\*{0,2}Final Answer\*{0,2}\s*(?::|：)?\s*|(?<=[。！？,，、.])\s*\*{0,2}Final Answer\*{0,2}\s*(?::|：)?\s*/gi;
 
+/** 与后端内联工具流一致：去掉 <tool>...</tool>，避免偶发漏网展示 */
+const INLINE_TOOL_BLOCK = /<tool\s+name\s*=\s*["']([^"']+)["']\s*>[\s\S]*?<\/tool>/gi;
+/** 单行 ReAct 抬头（后端已滤；前端兜底） */
+const REACT_LINE_ONLY = /^\s*(?:Question|Thought|Action|Action Input|Observation)\s*[:：].*$/gim;
+
+function stripInlineToolBlocks(body: string): string {
+  return body.replace(INLINE_TOOL_BLOCK, '');
+}
+
+function stripReactLinesOnly(body: string): string {
+  return body.replace(REACT_LINE_ONLY, '');
+}
+
 function stripDuplicateFinalAnswerLabels(body: string): string {
   return body.replace(INLINE_DUP_FINAL_ANSWER, '');
 }
@@ -102,15 +115,24 @@ export function formatAssistantDisplayText(
   options?: { streaming?: boolean }
 ): string {
   const streaming = Boolean(options?.streaming);
-  const s = (raw || '').trim();
+  let s = (raw || '').trim();
   if (!s) return '';
+  s = stripInlineToolBlocks(s);
+  s = stripReactLinesOnly(s);
+
+  const stripStreamingToolTail = (out: string): string => {
+    if (!streaming) return out;
+    const m = /<tool[^>]*$/i.exec(out);
+    if (m && m.index !== undefined) return out.slice(0, m.index).replace(/<\s*$/g, '');
+    return out.replace(/<\s*$/g, '');
+  };
 
   const afterMarker = s.match(FINAL_ANSWER_SPLIT);
   if (afterMarker && afterMarker.index !== undefined) {
     let body = s.slice(afterMarker.index + afterMarker[0].length);
     body = stripDuplicateFinalAnswerLabels(stripRepeatedReactAfterFinal(body));
     const normalized = normalizeChatWhitespace(body);
-    return repairStreamingMarkdown(normalized, streaming);
+    return stripStreamingToolTail(repairStreamingMarkdown(normalized, streaming));
   }
 
   const startFinal = s.match(FINAL_ANSWER_START);
@@ -118,7 +140,7 @@ export function formatAssistantDisplayText(
     let body = s.slice(startFinal[0].length);
     body = stripDuplicateFinalAnswerLabels(stripRepeatedReactAfterFinal(body));
     const normalized = normalizeChatWhitespace(body);
-    return repairStreamingMarkdown(normalized, streaming);
+    return stripStreamingToolTail(repairStreamingMarkdown(normalized, streaming));
   }
 
   // 仍含 ReAct 痕迹则宁可空白，也不要把 Thought/Action/Observation 整段展示
@@ -127,7 +149,7 @@ export function formatAssistantDisplayText(
   }
 
   const normalized = normalizeChatWhitespace(s);
-  return repairStreamingMarkdown(normalized, streaming);
+  return stripStreamingToolTail(repairStreamingMarkdown(normalized, streaming));
 }
 
 export function normalizeChatWhitespace(text: string): string {
@@ -145,6 +167,8 @@ export type StreamMeta = { conversation_id: number; session_id: number };
 export type ChatStreamCallbacks = {
   onMeta?: (data: StreamMeta) => void;
   onDelta?: (text: string) => void;
+  /** 如「🔍 查询中」；可选，未实现则忽略 */
+  onStatus?: (text: string) => void;
   onPing?: () => void;
   /** 正文 token 流结束（先于 done，不等落库）；用于尽快退出流式 UI */
   onStreamDone?: () => void;
@@ -273,6 +297,8 @@ async function chatWithStreamAt(
           callbacks.onMeta?.({ conversation_id: data.conversation_id, session_id: data.session_id });
         } else if (t === 'ping') {
           callbacks.onPing?.();
+        } else if (t === 'status' && data.text != null) {
+          callbacks.onStatus?.(data.text);
         } else if (t === 'delta' && data.text != null) {
           const chunk = data.text;
           if (typeof localStorage !== 'undefined' && localStorage.getItem('DEBUG_STREAM') === '1') {

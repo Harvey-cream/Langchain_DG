@@ -7,7 +7,7 @@ from typing import List
 
 from langchain_core.embeddings import Embeddings
 from langchain_core.tools import tool
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 
 from common.embedding import get_embedding_model
 
@@ -71,17 +71,9 @@ def _format_docs(docs) -> str:
     parts: List[str] = []
     for i, doc in enumerate(docs, start=1):
         meta = doc.metadata or {}
-        kb = meta.get("knowledge_base", "unknown")
-        source_path = meta.get("source_path", "unknown")
-        lang = meta.get("lang", "unknown")
-        top_section = meta.get("top_section", "unknown")
-        chunk_index = meta.get("chunk_index", "unknown")
-        content = (doc.page_content or "")[:1200]
-
-        parts.append(
-            f"[{i}] knowledge_base={kb}, source_path={source_path}, "
-            f"lang={lang}, top_section={top_section}, chunk_index={chunk_index}\n{content}"
-        )
+        kb = (meta.get("knowledge_base") or "资料").strip()
+        content = (doc.page_content or "").strip()[:1200]
+        parts.append(f"【片段{i}·{kb}】\n{content}")
     return "\n\n".join(parts)
 
 

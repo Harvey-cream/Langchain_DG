@@ -7,19 +7,16 @@ import traceback
 from typing import Any, Dict, Iterator, List
 
 from common.SSE import (
-    _FinalAnswerOnlyTokenHandler,
     _TOKEN_STREAM_END,
     _sse_bytes,
     _user_visible_reply,
 )
-from common.agent import (
-    chat_interview,
-    interview_checkpoint_thread_id,
-    invoke_interview_agent_with_stream_callbacks,
-)
+from common.agent import chat_interview, interview_checkpoint_thread_id
+from common.Queue import run_interview_chat_stream_with_queue
 from common.extend import (
     fallback_chat_title,
     polish_interview_title,
+    quick_interview_greeting_prompt,
     schedule_async_title_polish,
 )
 from common_web.response_web import HttpResult
@@ -238,17 +235,17 @@ class InterviewChatStreamView(APIView):
 
             def run_agent() -> None:
                 close_old_connections()
-                try:
-                    from Langchain_Agent1.tools import warmup_interview_rag_singletons
+                if not quick_interview_greeting_prompt(msg_text):
+                    try:
+                        from Langchain_Agent1.tools import warmup_interview_rag_singletons
 
-                    warmup_interview_rag_singletons()
-                except Exception:
-                    logger.exception("interview_chat_stream: warmup_interview_rag_singletons failed")
-                handler = _FinalAnswerOnlyTokenHandler(token_q)
+                        warmup_interview_rag_singletons()
+                    except Exception:
+                        logger.exception("interview_chat_stream: warmup_interview_rag_singletons failed")
                 try:
-                    reply = invoke_interview_agent_with_stream_callbacks(
+                    reply = run_interview_chat_stream_with_queue(
                         msg_text,
-                        [handler],
+                        token_q,
                         thread_id=thread_id,
                     )
                     result_q.put(("ok", reply))
@@ -283,8 +280,13 @@ class InterviewChatStreamView(APIView):
                 if item is _TOKEN_STREAM_END:
                     got_token_end = True
                     break
-                tokens_received += 1
-                yield _sse_bytes({"type": "delta", "text": item})
+                if isinstance(item, dict):
+                    t = item.get("type")
+                    if t == "status" and item.get("text") is not None:
+                        yield _sse_bytes({"type": "status", "text": item["text"]})
+                    elif t == "delta" and item.get("text") is not None:
+                        tokens_received += 1
+                        yield _sse_bytes({"type": "delta", "text": item["text"]})
 
             stream_done_sent = False
             if got_token_end and tokens_received:

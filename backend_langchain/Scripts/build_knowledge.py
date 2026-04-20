@@ -8,13 +8,12 @@
 
 解析仅文本（PyPDF），不含页面图片；正文做轻量去图片标记清洗。
 
-首次下载 embedding 前会 apply_hf_mirror_default；需直连官方请加 --no-hf-mirror。
+请在启动本脚本前在 shell 中设置 HF_ENDPOINT（或 .env），否则将走 huggingface.co。
 """
 from __future__ import annotations
 
 import argparse
 import importlib.util
-import os
 import re
 import sys
 from pathlib import Path
@@ -24,11 +23,12 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from dotenv import load_dotenv
+
+load_dotenv()
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.vectorstores import Chroma
-
-from common.extend import apply_hf_mirror_default
+from langchain_chroma import Chroma
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 _HTML_IMG_RE = re.compile(r"<img\s+[^>]*>", flags=re.IGNORECASE)
@@ -123,7 +123,9 @@ def _build_one_pdf(
         collection_name=collection,
         persist_directory=str(chroma_persist),
     )
-    db.persist()
+    persist_fn = getattr(db, "persist", None)
+    if callable(persist_fn):
+        persist_fn()
     print(f"  [{library_key}] 已写入 {chroma_persist}")
 
 
@@ -172,11 +174,6 @@ def main() -> None:
     load_dotenv()
     p = argparse.ArgumentParser(description="docs2 分区 PDF → chroma_db1 子目录（多向量库）")
     p.add_argument(
-        "--no-hf-mirror",
-        action="store_true",
-        help="不设置默认 HF 镜像",
-    )
-    p.add_argument(
         "--docs-dir",
         default="Langchain_knowledge/docs2",
         help="PDF 根目录（相对 backend_langchain）",
@@ -186,7 +183,11 @@ def main() -> None:
         default="Langchain_knowledge/chroma_db1",
         help="Chroma 根目录（相对 backend_langchain）；其下为各分区子目录",
     )
-    p.add_argument("--collection-name", default="pdf_knowledge", help="各分区内 collection 名（与 md 库一致时可便于检索）")
+    p.add_argument(
+        "--collection-name",
+        default="md_knowledge",
+        help="各分区内 collection 名（须与 Langchain_Agent1/tools.py 中 _COLLECTION_NAME 一致）",
+    )
     p.add_argument(
         "--embedding-model",
         default="BAAI/bge-small-zh-v1.5",
@@ -199,11 +200,6 @@ def main() -> None:
 
     args = p.parse_args()
     base_dir = Path(__file__).resolve().parent.parent
-
-    if args.no_hf_mirror:
-        os.environ.pop("HF_ENDPOINT", None)
-    else:
-        apply_hf_mirror_default()
 
     pdf_root = (base_dir / args.docs_dir).resolve()
     chroma_base = (base_dir / args.chroma_dir).resolve()
