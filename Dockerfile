@@ -19,6 +19,7 @@ RUN set -eux; \
       sed -i 's/deb.debian.org/mirrors.aliyun.com/g; s/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
     fi; \
     apt-get update && apt-get install -y --no-install-recommends \
+      libcairo2-dev \
       default-libmysqlclient-dev \
       pkg-config \
       build-essential \
