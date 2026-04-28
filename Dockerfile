@@ -1,10 +1,10 @@
+# syntax=docker/dockerfile:1.7
 # 后端：Django + LangChain（构建上下文为仓库根目录）
 # 生产镜像不装 torch：向量嵌入走 DashScope API（见 common/embedding.py）。
 FROM python:3.10-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
     DJANGO_SETTINGS_MODULE=backend_langchain.settings \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
     PIP_TRUSTED_HOST=mirrors.aliyun.com
@@ -26,7 +26,8 @@ RUN set -eux; \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend_langchain/requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip setuptools wheel \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip setuptools wheel \
     && pip install -r /app/requirements.txt
 
 COPY backend_langchain/ /app/
