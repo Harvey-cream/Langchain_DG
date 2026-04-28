@@ -80,7 +80,7 @@ def warmup_rag_singletons() -> None:
     for sub in _CHROMA_SUBDIRS:
         _get_chroma_store(sub)
     try:
-        from common.mcp_multiserver import load_mcp_tools_once
+        from MCP.mcp_multiserver import load_mcp_tools_once
 
         load_mcp_tools_once()
     except Exception:
@@ -167,8 +167,17 @@ RAG_TOOLS = [
 ]
 
 
-def get_all_agent_tools() -> list:
-    """内置 RAG 工具 + MCP_SERVERS_* 配置的 MultiServer 工具（LangChain BaseTool）。"""
-    from common.mcp_multiserver import load_mcp_tools_once
+def _is_tavily_tool(tool_obj: object) -> bool:
+    name = str(getattr(tool_obj, "name", "") or "").strip().lower()
+    return "tavily" in name or "web_search" in name
 
-    return list(RAG_TOOLS) + load_mcp_tools_once()
+
+def get_all_agent_tools(*, enable_web_search: bool = False) -> list:
+    """内置 RAG 工具 + 人机协同工具 + MCP 工具（按 enable_web_search 控制 Tavily 可用性）。"""
+    from human_in_the_loop.human_loop import confirm_pdf_export, finalize_pdf_export
+    from MCP.mcp_multiserver import load_mcp_tools_once
+
+    mcp_tools = list(load_mcp_tools_once())
+    if not enable_web_search:
+        mcp_tools = [t for t in mcp_tools if not _is_tavily_tool(t)]
+    return list(RAG_TOOLS) + [confirm_pdf_export, finalize_pdf_export] + mcp_tools
