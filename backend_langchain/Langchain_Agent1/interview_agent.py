@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Iterator
+import threading
+from typing import Any, Iterator, Optional
 
 from langchain_core.messages import HumanMessage
 from langgraph.graph.state import CompiledStateGraph
@@ -44,14 +45,20 @@ def get_interview_agent_executor(
 
 def stream_interview_agent(
     *,
-    prompt_text: str,
+    prompt_text: str = "",
     thread_id: str,
     temperature: float = 0.45,
+    resume_pdf: bool | None = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Iterator[dict[str, Any]]:
     """面试大师：与主 agent 一致的同步流式语义。"""
     agent = get_interview_agent_executor(temperature=temperature, streaming=True)
     yield from stream_graph_chat_model_events(
-        agent, prompt_text=prompt_text, thread_id=thread_id
+        agent,
+        prompt_text=prompt_text,
+        thread_id=thread_id,
+        resume_pdf=resume_pdf,
+        cancel_event=cancel_event,
     )
 
 

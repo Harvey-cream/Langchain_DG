@@ -9,6 +9,7 @@ from typing import Iterable
 
 from langchain_core.embeddings import Embeddings
 
+from backend_langchain.logger_func import log_info_event
 from common.embedding import get_embedding_model
 
 
@@ -68,6 +69,24 @@ AGENT_SKILLS: tuple[SkillSpec, ...] = (
             "用户没有提供任何 GitHub/Gitee 仓库链接或仓库坐标。",
         ),
     ),
+    SkillSpec(
+        name="document_export",
+        when="用户明确要导出 PDF、生成可下载文档、打印/保存排版材料；含把对话、笔记、代码/源码/项目说明整理成 PDF 交付",
+        output_schema="人机协同：必须先调用 confirm_pdf_export 一次；用户确认后结合上下文润色，再调用 finalize_pdf_export 一次（title + body_markdown）生成可下载 PDF；确认前勿声称已生成文件",
+        prototypes=(
+            "用户要求把当前对话或某段内容导出成 PDF。",
+            "用户希望生成可下载的 PDF、打印版学习路线或排版好的材料。",
+            "用户说整理成文档、做成 PDF、导出发我、给我正式版/打印版。",
+            "用户要把总结、路线图、笔记输出为 PDF 或 Word 式交付物（以 PDF 为统一出口时可等同处理）。",
+            "用户要把代码、源码、刚写的程序、项目说明或 README 整理成 PDF 或导出为 PDF。",
+            "用户说把这段代码打成 PDF、代码导出 PDF、打印代码、代码片段生成文档版。",
+            "用户要求把仓库里的代码、解决方案、实现步骤导出成可打印的 PDF 材料。",
+        ),
+        anti_prototypes=(
+            "用户只是在问 PDF 是什么、格式原理、和其它格式的区别，不要求导出文件。",
+            "用户只要改 bug、写实现或调试，全文未提及导出、PDF、下载、打印、文档交付。",
+        ),
+    ),
 )
 
 
@@ -97,6 +116,21 @@ INTERVIEW_SKILLS: tuple[SkillSpec, ...] = (
         prototypes=(
             "用户询问题库知识点定义、原理、区别与归纳。",
             "用户问 Java、Vue、大模型等面试知识点是什么或怎么理解。",
+        ),
+    ),
+    SkillSpec(
+        name="document_export",
+        when="用户要把面试准备内容导出为 PDF；含代码题解答、手写代码、算法步骤整理成 PDF",
+        output_schema="人机协同：先 confirm_pdf_export；用户确认后润色全文再 finalize_pdf_export；确认前勿声称已生成文件",
+        prototypes=(
+            "用户希望把面试题总结、错题本或准备清单导出成 PDF。",
+            "用户要下载打印版面试材料、PDF 版复习大纲。",
+            "用户说整理成文档发我、做成 PDF。",
+            "用户要把代码题答案、手写代码、算法实现过程导出或打印成 PDF。",
+        ),
+        anti_prototypes=(
+            "用户只在模拟面试问答，未要求导出或 PDF。",
+            "用户只问某题怎么答、知识点是什么，不要求文档或下载。",
         ),
     ),
 )
@@ -222,24 +256,25 @@ def _pick_skill(user_input: str, skills: Iterable[SkillSpec]) -> SkillSpec | Non
             f"best_score={best_score:.4f} min_sim={_ROUTER_MIN_SIM:.4f}"
         )
         print(msg)
-        logger.info(msg)
+        log_info_event(logger, "skill_router_debug_scores", message=msg)
     if best is None:
         return None
     if best_score < _ROUTER_MIN_SIM:
         if _ROUTER_DEBUG:
             print("skill_router not selected: best score below threshold")
-            logger.info("skill_router not selected: best score below threshold")
+            log_info_event(logger, "skill_router_not_selected_below_threshold")
         return None
     preview = (user_input or "").replace("\n", " ")[:120]
-    logger.info(
-        "skill_router selected=%s score=%.4f input=%r",
-        best.name,
-        best_score,
-        preview,
+    log_info_event(
+        logger,
+        "skill_router_selected",
+        selected=best.name,
+        score=round(best_score, 4),
+        input=preview,
     )
     if _ROUTER_DEBUG:
         print(f"skill_router selected={best.name}")
-        logger.info("skill_router selected=%s", best.name)
+        log_info_event(logger, "skill_router_debug_selected", selected=best.name)
     return best
 
 

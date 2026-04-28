@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
-from typing import List
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, List
 from pathlib import Path
 
 from langchain_core.embeddings import Embeddings
@@ -11,6 +13,7 @@ from langchain_core.tools import tool
 from langchain_chroma import Chroma
 
 from common.embedding import get_embedding_model
+from backend_langchain.logger_func import log_exception_event
 
 logger = logging.getLogger(__name__)
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
@@ -84,7 +87,7 @@ def warmup_rag_singletons() -> None:
 
         load_mcp_tools_once()
     except Exception:
-        logger.exception("warmup_rag_singletons: MCP 工具预加载失败")
+        log_exception_event(logger, "warmup_rag_singletons_mcp_preload_failed")
 
 
 def _format_docs(docs) -> str:
@@ -172,12 +175,55 @@ def _is_tavily_tool(tool_obj: object) -> bool:
     return "tavily" in name or "web_search" in name
 
 
+def _mcp_tool_with_sync_invoke(tool: object) -> object:
+    """
+    langchain-mcp-adapters 的 MCP 工具多为仅含 coroutine 的 StructuredTool；
+    LangGraph 同步 ToolNode 调用 tool.invoke() → _run 要求有 func，否则报
+    "StructuredTool does not support sync invocation"。
+    这里为 coroutine 补一层同步包装（asyncio.run，必要时在独立线程中跑事件循环）。
+    """
+    from langchain_core.tools.structured import StructuredTool
+
+    if not isinstance(tool, StructuredTool):
+        return tool
+    if getattr(tool, "func", None) is not None:
+        return tool
+    coro = getattr(tool, "coroutine", None)
+    if coro is None:
+        return tool
+
+    def _sync(*args: Any, **kwargs: Any) -> Any:
+        async def _call() -> Any:
+            return await coro(*args, **kwargs)
+
+        def _isolated_run() -> Any:
+            return asyncio.run(_call())
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return _isolated_run()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_isolated_run).result()
+
+    try:
+        return tool.model_copy(update={"func": _sync})
+    except Exception:  # noqa: BLE001
+        log_exception_event(
+            logger,
+            "mcp_tool_sync_adapter_failed",
+            tool_name=getattr(tool, "name", None),
+        )
+        return tool
+
+
 def get_all_agent_tools(*, enable_web_search: bool = False) -> list:
     """内置 RAG 工具 + 人机协同工具 + MCP 工具（按 enable_web_search 控制 Tavily 可用性）。"""
     from human_in_the_loop.human_loop import confirm_pdf_export, finalize_pdf_export
     from MCP.mcp_multiserver import load_mcp_tools_once
 
     mcp_tools = list(load_mcp_tools_once())
+    mcp_tools = [_mcp_tool_with_sync_invoke(t) for t in mcp_tools]
     if not enable_web_search:
         mcp_tools = [t for t in mcp_tools if not _is_tavily_tool(t)]
     return list(RAG_TOOLS) + [confirm_pdf_export, finalize_pdf_export] + mcp_tools

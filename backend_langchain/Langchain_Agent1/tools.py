@@ -10,6 +10,7 @@ from langchain_core.tools import tool
 from langchain_chroma import Chroma
 
 from common.embedding import get_embedding_model
+from human_in_the_loop.human_loop import confirm_pdf_export, finalize_pdf_export
 
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
@@ -122,4 +123,10 @@ def rag_interview_vue(query: str) -> str:
     return _rag_similarity_search(_STORE_VUE_INTERVIEW, query)
 
 
-INTERVIEW_RAG_TOOLS = [rag_interview_ai_llm, rag_interview_java, rag_interview_vue]
+INTERVIEW_RAG_TOOLS = [
+    rag_interview_ai_llm,
+    rag_interview_java,
+    rag_interview_vue,
+    confirm_pdf_export,
+    finalize_pdf_export,
+]

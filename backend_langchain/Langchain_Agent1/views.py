@@ -16,7 +16,6 @@ from common.Queue import run_interview_chat_stream_with_queue
 from common.extend import (
     fallback_chat_title,
     polish_interview_title,
-    quick_interview_greeting_prompt,
     schedule_async_title_polish,
 )
 from common_web.response_web import HttpResult
@@ -28,6 +27,11 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.views import APIView
 
+from backend_langchain.logger_func import (
+    log_error_event,
+    log_exception_event,
+    log_warning_event,
+)
 from User.models import InterviewConversation, InterviewSession
 from User.utils.user_utils import get_current_user
 logger = logging.getLogger(__name__)
@@ -191,6 +195,8 @@ class InterviewChatStreamView(APIView):
 
     _FALLBACK_DELTA_CHARS = 16
     _PING_INTERVAL_SEC = 2.0
+    _WORKER_JOIN_TIMEOUT_SEC = 120.0
+    _WORKER_JOIN_AFTER_CANCEL_SEC = 30.0
 
     def post(self, request):
         user = get_current_user(request)
@@ -198,27 +204,46 @@ class InterviewChatStreamView(APIView):
             return JsonResponse({"success": False, "msg": "认证失败，请重新登录"}, status=401)
 
         data = request.data if isinstance(request.data, dict) else {}
+        resume_raw = data.get("resume_pdf_export")
+        if resume_raw is None:
+            resume_pdf: bool | None = None
+        elif isinstance(resume_raw, bool):
+            resume_pdf = resume_raw
+        else:
+            resume_pdf = str(resume_raw).lower() in ("1", "true", "yes")
+
         msg_text = (data.get("message") or "").strip()
-        if not msg_text:
-            return JsonResponse({"success": False, "msg": "消息不能为空"}, status=400)
-
         conversation_id = data.get("conversation_id")
-        conversation = None
-        if conversation_id is not None:
-            conversation = InterviewConversation.objects.filter(id=conversation_id, user=user).first()
 
-        if not conversation:
-            title = fallback_chat_title(msg_text)
-            conversation = InterviewConversation.objects.create(user=user, title=title)
-            schedule_async_title_polish(
-                conversation_id=conversation.id,
-                user_id=user.pk,
-                user_message=msg_text,
-                polish_fn=polish_interview_title,
-                model=InterviewConversation,
-                thread_name_prefix="polish-interview-title",
-                log_context="interview chat stream",
-            )
+        if resume_pdf is not None:
+            if conversation_id is None:
+                return JsonResponse(
+                    {"success": False, "msg": "恢复 PDF 确认需要 conversation_id"}, status=400
+                )
+            conversation = InterviewConversation.objects.filter(id=conversation_id, user=user).first()
+            if not conversation:
+                return JsonResponse({"success": False, "msg": "会话不存在"}, status=404)
+            if not msg_text:
+                msg_text = "[PDF导出确认]"
+        else:
+            if not msg_text:
+                return JsonResponse({"success": False, "msg": "消息不能为空"}, status=400)
+            conversation = None
+            if conversation_id is not None:
+                conversation = InterviewConversation.objects.filter(id=conversation_id, user=user).first()
+
+            if not conversation:
+                title = fallback_chat_title(msg_text)
+                conversation = InterviewConversation.objects.create(user=user, title=title)
+                schedule_async_title_polish(
+                    conversation_id=conversation.id,
+                    user_id=user.pk,
+                    user_message=msg_text,
+                    polish_fn=polish_interview_title,
+                    model=InterviewConversation,
+                    thread_name_prefix="polish-interview-title",
+                    log_context="interview chat stream",
+                )
 
         thread_id = interview_checkpoint_thread_id(user.pk, conversation.id)
 
@@ -232,21 +257,17 @@ class InterviewChatStreamView(APIView):
         def gen() -> Iterator[bytes]:
             result_q: queue.Queue = queue.Queue(maxsize=1)
             token_q: queue.Queue = queue.Queue()
+            worker_cancel_evt = threading.Event()
 
             def run_agent() -> None:
                 close_old_connections()
-                if not quick_interview_greeting_prompt(msg_text):
-                    try:
-                        from Langchain_Agent1.tools import warmup_interview_rag_singletons
-
-                        warmup_interview_rag_singletons()
-                    except Exception:
-                        logger.exception("interview_chat_stream: warmup_interview_rag_singletons failed")
                 try:
                     reply = run_interview_chat_stream_with_queue(
                         msg_text,
                         token_q,
                         thread_id=thread_id,
+                        resume_pdf=resume_pdf,
+                        cancel_event=worker_cancel_evt,
                     )
                     result_q.put(("ok", reply))
                 except Exception as e:  # noqa: BLE001
@@ -268,6 +289,8 @@ class InterviewChatStreamView(APIView):
 
             tokens_received = 0
             got_token_end = False
+            interrupt_sent = False
+            pdf_ready_sent = False
             while True:
                 try:
                     item = token_q.get(timeout=self._PING_INTERVAL_SEC)
@@ -287,32 +310,78 @@ class InterviewChatStreamView(APIView):
                     elif t == "delta" and item.get("text") is not None:
                         tokens_received += 1
                         yield _sse_bytes({"type": "delta", "text": item["text"]})
+                    elif t == "interrupt" and item.get("kind") is not None:
+                        interrupt_sent = True
+                        yield _sse_bytes(
+                            {
+                                "type": "interrupt",
+                                "kind": item["kind"],
+                                "message": item.get("message") or "",
+                            }
+                        )
+                    elif t == "pdf_ready" and item.get("url"):
+                        pdf_ready_sent = True
+                        yield _sse_bytes(
+                            {
+                                "type": "pdf_ready",
+                                "url": item["url"],
+                                "filename": item.get("filename") or "export.pdf",
+                            }
+                        )
+
+            # Worker 在发送 token END 之前已将 ok/err 写入 result_q；可先 peek，不必等 join。
+            peek_kind = None
+            peek_payload = None
+            if got_token_end:
+                try:
+                    peek_kind, peek_payload = result_q.get_nowait()
+                except queue.Empty:
+                    pass
 
             stream_done_sent = False
-            if got_token_end and tokens_received:
+            if got_token_end and (tokens_received or interrupt_sent or pdf_ready_sent):
                 yield _sse_bytes({"type": "stream_done"})
                 stream_done_sent = True
 
-            # 须先 join + 落库，再发 done：若先发 done，客户端断开可能中止生成器，save() 来不及执行。
-            worker.join(timeout=120.0)
-
-            try:
-                kind, payload = result_q.get_nowait()
-            except queue.Empty:
-                session_obj.ai_response = "[智能体调用失败]\n未收到执行结果"
-                session_obj.save()
-                conversation.save()
-                if not got_token_end:
-                    yield _sse_bytes({"type": "error", "message": "智能体未返回结果"})
-                elif tokens_received:
-                    logger.warning(
-                        "interview_chat_stream: result_q empty after worker ended but deltas were sent; "
-                        "check worker timeout or thread errors"
+            worker.join(timeout=self._WORKER_JOIN_TIMEOUT_SEC)
+            if worker.is_alive():
+                worker_cancel_evt.set()
+                log_warning_event(
+                    logger,
+                    "interview_chat_stream_worker_join_timeout",
+                    hint="cancel_event set for cooperative shutdown",
+                    tokens_received=tokens_received,
+                )
+                worker.join(timeout=self._WORKER_JOIN_AFTER_CANCEL_SEC)
+                if worker.is_alive():
+                    log_error_event(
+                        logger,
+                        "interview_chat_stream_worker_still_alive_after_cancel",
+                        tokens_received=tokens_received,
                     )
-                else:
-                    logger.error("interview_chat_stream: result_q empty after worker join")
-                yield _sse_bytes({"type": "done"})
-                return
+
+            kind = peek_kind
+            payload = peek_payload
+            if kind is None:
+                try:
+                    kind, payload = result_q.get_nowait()
+                except queue.Empty:
+                    session_obj.ai_response = "[智能体调用失败]\n未收到执行结果"
+                    session_obj.save()
+                    conversation.save()
+                    if not got_token_end:
+                        yield _sse_bytes({"type": "error", "message": "智能体未返回结果"})
+                    elif tokens_received:
+                        log_warning_event(
+                            logger,
+                            "interview_chat_stream_result_queue_empty_with_deltas",
+                            hint="check worker timeout or thread errors",
+                            tokens_received=tokens_received,
+                        )
+                    else:
+                        log_error_event(logger, "interview_chat_stream_result_queue_empty_after_join")
+                    yield _sse_bytes({"type": "done"})
+                    return
 
             if kind == "err":
                 err, tb = payload
@@ -325,8 +394,10 @@ class InterviewChatStreamView(APIView):
                 if not got_token_end:
                     yield _sse_bytes({"type": "error", "message": str(err)})
                 else:
-                    logger.error(
-                        "interview_chat_stream: agent invoke failed after stream ended: %s", err, exc_info=True
+                    log_exception_event(
+                        logger,
+                        "interview_chat_stream_agent_invoke_failed_after_stream_end",
+                        error=str(err),
                     )
                 yield _sse_bytes({"type": "done"})
                 return

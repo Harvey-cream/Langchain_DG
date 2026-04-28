@@ -1,4 +1,8 @@
 {
+  "tavily": {
+    "transport": "streamable_http",
+    "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=tvly-REPLACE_WITH_YOUR_KEY"
+  },
   "gitee": {
     "transport": "streamable_http",
     "url": "https://api.gitee.com/mcp",

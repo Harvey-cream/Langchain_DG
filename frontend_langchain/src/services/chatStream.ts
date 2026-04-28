@@ -164,12 +164,20 @@ export const INTERVIEW_STREAM_URL = '/api/interview/chat/stream/';
 
 export type StreamMeta = { conversation_id: number; session_id: number };
 
+export type PdfInterruptPayload = { kind: string; message: string };
+
+export type PdfReadyPayload = { url: string; filename: string };
+
 export type ChatStreamCallbacks = {
   onMeta?: (data: StreamMeta) => void;
   onDelta?: (text: string) => void;
   /** 如「🔍 查询中」；可选，未实现则忽略 */
   onStatus?: (text: string) => void;
   onPing?: () => void;
+  /** LangGraph interrupt：PDF 确认等 */
+  onInterrupt?: (data: PdfInterruptPayload) => void;
+  /** 后端已生成 PDF，触发浏览器下载 */
+  onPdfReady?: (data: PdfReadyPayload) => void;
   /** 正文 token 流结束（先于 done，不等落库）；用于尽快退出流式 UI */
   onStreamDone?: () => void;
   onDone?: () => void;
@@ -181,7 +189,12 @@ async function chatWithStreamAt(
   message: string,
   conversationId: number | undefined,
   callbacks: ChatStreamCallbacks,
-  options?: { idleMs?: number; signal?: AbortSignal }
+  options?: {
+    idleMs?: number;
+    signal?: AbortSignal;
+    resumePdfExport?: boolean;
+    enableWebSearch?: boolean;
+  }
 ): Promise<void> {
   const token = localStorage.getItem('token');
   if (!token) {
@@ -212,7 +225,14 @@ async function chatWithStreamAt(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ message, conversation_id: conversationId }),
+    body: JSON.stringify({
+      message,
+      conversation_id: conversationId,
+      enable_web_search: Boolean(options?.enableWebSearch),
+      ...(options?.resumePdfExport !== undefined
+        ? { resume_pdf_export: options.resumePdfExport }
+        : {}),
+    }),
     signal: fetchAbort.signal,
   });
 
@@ -286,7 +306,16 @@ async function chatWithStreamAt(
         if (!line) continue;
         const jsonStr = line.slice(6).trim();
         if (!jsonStr) continue;
-        let data: { type?: string; text?: string; message?: string; conversation_id?: number; session_id?: number };
+        let data: {
+          type?: string;
+          text?: string;
+          message?: string;
+          kind?: string;
+          url?: string;
+          filename?: string;
+          conversation_id?: number;
+          session_id?: number;
+        };
         try {
           data = JSON.parse(jsonStr) as typeof data;
         } catch {
@@ -315,6 +344,16 @@ async function chatWithStreamAt(
           callbacks.onDelta?.(chunk);
         } else if (t === 'error' && data.message != null) {
           callbacks.onError?.(data.message);
+        } else if (t === 'interrupt' && data.kind != null) {
+          callbacks.onInterrupt?.({
+            kind: String(data.kind),
+            message: String(data.message ?? ''),
+          });
+        } else if (t === 'pdf_ready' && data.url != null) {
+          callbacks.onPdfReady?.({
+            url: String(data.url),
+            filename: String(data.filename ?? 'export.pdf'),
+          });
         } else if (t === 'stream_done') {
           callbacks.onStreamDone?.();
         } else if (t === 'done') {
@@ -342,7 +381,12 @@ export async function chatWithAgentStream(
   message: string,
   conversationId: number | undefined,
   callbacks: ChatStreamCallbacks,
-  options?: { idleMs?: number; signal?: AbortSignal }
+  options?: {
+    idleMs?: number;
+    signal?: AbortSignal;
+    resumePdfExport?: boolean;
+    enableWebSearch?: boolean;
+  }
 ): Promise<void> {
   return chatWithStreamAt(AGENT_STREAM_URL, message, conversationId, callbacks, options);
 }
@@ -352,7 +396,12 @@ export async function chatWithInterviewStream(
   message: string,
   conversationId: number | undefined,
   callbacks: ChatStreamCallbacks,
-  options?: { idleMs?: number; signal?: AbortSignal }
+  options?: {
+    idleMs?: number;
+    signal?: AbortSignal;
+    resumePdfExport?: boolean;
+    enableWebSearch?: boolean;
+  }
 ): Promise<void> {
   return chatWithStreamAt(INTERVIEW_STREAM_URL, message, conversationId, callbacks, options);
 }

@@ -13,6 +13,7 @@ from django.db import close_old_connections
 from django.db.models import Model
 from langchain_core.messages import HumanMessage
 
+from backend_langchain.logger_func import log_exception_event
 from config.config import get_qwen_chat_model
 
 logger = logging.getLogger(__name__)
@@ -208,11 +209,12 @@ def schedule_async_title_polish(
             title = (polished or "")[:255]
             model.objects.filter(pk=conversation_id, user_id=user_id).update(title=title)
         except Exception:
-            logger.exception(
-                "async polish title failed (%s) conv_id=%s user_id=%s",
-                log_context,
-                conversation_id,
-                user_id,
+            log_exception_event(
+                logger,
+                "async_polish_title_failed",
+                log_context=log_context,
+                conversation_id=conversation_id,
+                user_id=user_id,
             )
         finally:
             close_old_connections()

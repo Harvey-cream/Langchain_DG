@@ -42,6 +42,11 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "MCP.mcp_multiserver": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
         "chromadb.telemetry": {
             "handlers": ["console"],
             "level": "CRITICAL",

@@ -182,6 +182,10 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# 用户导出 PDF 等生成文件（生产环境建议由 Nginx 托管 MEDIA_ROOT）
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 

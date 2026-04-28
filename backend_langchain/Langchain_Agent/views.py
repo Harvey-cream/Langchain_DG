@@ -4,8 +4,6 @@ import logging
 import queue
 import threading
 import traceback
-import time
-from uuid import uuid4
 from typing import List, Dict, Any, Iterator
 
 from common.SSE import (
@@ -28,10 +26,15 @@ from common_web.utils import format_datetime
 from django.utils import timezone
 from common.agent import agent_checkpoint_thread_id, chat as agent_chat
 from common.Queue import run_chat_stream_with_queue
+from backend_langchain.logger_func import (
+    log_error_event,
+    log_exception_event,
+    log_warning_event,
+    make_trace_event_logger,
+)
 from common.extend import (
     fallback_chat_title,
     polish_agent_conversation_title,
-    quick_agent_greeting_prompt,
     schedule_async_title_polish,
 )
 
@@ -39,6 +42,14 @@ logger = logging.getLogger(__name__)
 
 # 错误详情存库时截断，避免超长 traceback 撑爆数据库行
 _MAX_ERROR_DETAIL_LEN = 8000
+
+
+def _parse_bool_flag(raw: Any, *, default: bool = False) -> bool:
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -132,6 +143,7 @@ class ChatView(APIView):
             message = (data.get("message") or "").strip()
             if not message:
                 return HttpResult.fail("消息不能为空")
+            enable_web_search = _parse_bool_flag(data.get("enable_web_search"), default=False)
 
             conversation_id = data.get("conversation_id")
 
@@ -172,7 +184,11 @@ class ChatView(APIView):
             )
             # 调用智能体（ReAct + RAG）
             try:
-                reply = agent_chat(message, thread_id=thread_id)
+                reply = agent_chat(
+                    message,
+                    thread_id=thread_id,
+                    enable_web_search=enable_web_search,
+                )
             except Exception as e:  # noqa: BLE001
                 tb = traceback.format_exc()
                 detail = f"{str(e)}\n\n--- traceback ---\n{tb}"
@@ -217,48 +233,70 @@ class ChatStreamView(APIView):
 
     _FALLBACK_DELTA_CHARS = 16
     _PING_INTERVAL_SEC = 2.0
+    _WORKER_JOIN_TIMEOUT_SEC = 120.0
+    _WORKER_JOIN_AFTER_CANCEL_SEC = 30.0
 
     def post(self, request):
-        trace_start = time.perf_counter()
-        trace_id = f"stream-{uuid4().hex[:10]}"
-
-        def trace_event(event: str, **extra: Any) -> None:
-            elapsed_ms = int((time.perf_counter() - trace_start) * 1000)
-            fields = {
-                "trace_id": trace_id,
-                "event": event,
-                "elapsed_ms": elapsed_ms,
-                **extra,
-            }
-            logger.info("chat_stream_trace %s", fields)
+        trace_event = make_trace_event_logger(
+            logger,
+            log_key="chat_stream_trace",
+            trace_prefix="stream",
+        )
 
         user = get_current_user(request)
         if not user:
             return JsonResponse({"success": False, "msg": "认证失败，请重新登录"}, status=401)
 
         data = request.data if isinstance(request.data, dict) else {}
+        resume_raw = data.get("resume_pdf_export")
+        if resume_raw is None:
+            resume_pdf: bool | None = None
+        elif isinstance(resume_raw, bool):
+            resume_pdf = resume_raw
+        else:
+            resume_pdf = str(resume_raw).lower() in ("1", "true", "yes")
+
         msg_text = (data.get("message") or "").strip()
-        if not msg_text:
-            return JsonResponse({"success": False, "msg": "消息不能为空"}, status=400)
-        trace_event("request_enter", user_id=getattr(user, "pk", None), msg_len=len(msg_text))
-
         conversation_id = data.get("conversation_id")
-        conversation = None
-        if conversation_id is not None:
-            conversation = UserConversation.objects.filter(id=conversation_id, user=user).first()
+        enable_web_search = _parse_bool_flag(data.get("enable_web_search"), default=False)
 
-        if not conversation:
-            title = fallback_chat_title(msg_text)
-            conversation = UserConversation.objects.create(user=user, title=title)
-            schedule_async_title_polish(
-                conversation_id=conversation.id,
-                user_id=user.pk,
-                user_message=msg_text,
-                polish_fn=polish_agent_conversation_title,
-                model=UserConversation,
-                thread_name_prefix="polish-title",
-                log_context="agent chat stream",
-            )
+        if resume_pdf is not None:
+            if conversation_id is None:
+                return JsonResponse(
+                    {"success": False, "msg": "恢复 PDF 确认需要 conversation_id"}, status=400
+                )
+            conversation = UserConversation.objects.filter(id=conversation_id, user=user).first()
+            if not conversation:
+                return JsonResponse({"success": False, "msg": "会话不存在"}, status=404)
+            if not msg_text:
+                msg_text = "[PDF导出确认]"
+        else:
+            if not msg_text:
+                return JsonResponse({"success": False, "msg": "消息不能为空"}, status=400)
+            conversation = None
+            if conversation_id is not None:
+                conversation = UserConversation.objects.filter(id=conversation_id, user=user).first()
+
+            if not conversation:
+                title = fallback_chat_title(msg_text)
+                conversation = UserConversation.objects.create(user=user, title=title)
+                schedule_async_title_polish(
+                    conversation_id=conversation.id,
+                    user_id=user.pk,
+                    user_message=msg_text,
+                    polish_fn=polish_agent_conversation_title,
+                    model=UserConversation,
+                    thread_name_prefix="polish-title",
+                    log_context="agent chat stream",
+                )
+
+        trace_event(
+            "request_enter",
+            user_id=getattr(user, "pk", None),
+            msg_len=len(msg_text),
+            resume_pdf=resume_pdf,
+            enable_web_search=enable_web_search,
+        )
 
         thread_id = agent_checkpoint_thread_id(user.pk, conversation.id)
 
@@ -277,23 +315,19 @@ class ChatStreamView(APIView):
         def gen() -> Iterator[bytes]:
             result_q: queue.Queue = queue.Queue(maxsize=1)
             token_q: queue.Queue = queue.Queue()
+            worker_cancel_evt = threading.Event()
 
             def run_agent() -> None:
                 close_old_connections()
-                # 问候/能力短句快路径不调 RAG：跳过 Chroma+嵌入预热，避免十几秒只 ping 无 delta
-                if not quick_agent_greeting_prompt(msg_text):
-                    try:
-                        from .tools import warmup_rag_singletons
-
-                        warmup_rag_singletons()
-                    except Exception:
-                        logger.exception("chat_stream: warmup_rag_singletons failed")
                 try:
                     reply = run_chat_stream_with_queue(
                         msg_text,
                         token_q,
                         thread_id=thread_id,
                         trace_cb=trace_event,
+                        resume_pdf=resume_pdf,
+                        enable_web_search=enable_web_search,
+                        cancel_event=worker_cancel_evt,
                     )
                     result_q.put(("ok", reply))
                 except Exception as e:  # noqa: BLE001
@@ -315,6 +349,8 @@ class ChatStreamView(APIView):
 
             tokens_received = 0
             got_token_end = False
+            interrupt_sent = False
+            pdf_ready_sent = False
             while True:
                 try:
                     item = token_q.get(timeout=self._PING_INTERVAL_SEC)
@@ -334,34 +370,82 @@ class ChatStreamView(APIView):
                     elif t == "delta" and item.get("text") is not None:
                         tokens_received += 1
                         yield _sse_bytes({"type": "delta", "text": item["text"]})
+                    elif t == "interrupt" and item.get("kind") is not None:
+                        interrupt_sent = True
+                        yield _sse_bytes(
+                            {
+                                "type": "interrupt",
+                                "kind": item["kind"],
+                                "message": item.get("message") or "",
+                            }
+                        )
+                    elif t == "pdf_ready" and item.get("url"):
+                        pdf_ready_sent = True
+                        yield _sse_bytes(
+                            {
+                                "type": "pdf_ready",
+                                "url": item["url"],
+                                "filename": item.get("filename") or "export.pdf",
+                            }
+                        )
+
+            # Worker 在发送 token END 之前已将 ok/err 写入 result_q；可先 peek，不必等 join（避免卡在收尾）。
+            peek_kind = None
+            peek_payload = None
+            if got_token_end:
+                try:
+                    peek_kind, peek_payload = result_q.get_nowait()
+                except queue.Empty:
+                    pass
 
             stream_done_sent = False
-            if got_token_end and tokens_received:
+            if got_token_end and (tokens_received or interrupt_sent or pdf_ready_sent):
                 yield _sse_bytes({"type": "stream_done"})
                 trace_event("stream_done", tokens_received=tokens_received)
                 stream_done_sent = True
 
-            # 须先 join + 落库，再发 done：若先发 done，浏览器/前端常会立刻断开，迭代器可能被中止，save() 来不及执行。
-            worker.join(timeout=120.0)
-
-            try:
-                kind, payload = result_q.get_nowait()
-            except queue.Empty:
-                session_obj.ai_response = "[智能体调用失败]\n未收到执行结果"
-                session_obj.save()
-                conversation.save()
-                if not got_token_end:
-                    yield _sse_bytes({"type": "error", "message": "智能体未返回结果"})
-                elif tokens_received:
-                    logger.warning(
-                        "chat_stream: result_q empty after worker ended but deltas were sent; "
-                        "check worker timeout or thread errors"
+            # join：收回线程数据库连接；超时则 cancel_event，促使 LangGraph / LLM 流协作退出后再 join。
+            worker.join(timeout=self._WORKER_JOIN_TIMEOUT_SEC)
+            if worker.is_alive():
+                worker_cancel_evt.set()
+                log_warning_event(
+                    logger,
+                    "chat_stream_worker_join_timeout",
+                    hint="cancel_event set for cooperative shutdown",
+                    tokens_received=tokens_received,
+                )
+                worker.join(timeout=self._WORKER_JOIN_AFTER_CANCEL_SEC)
+                if worker.is_alive():
+                    log_error_event(
+                        logger,
+                        "chat_stream_worker_still_alive_after_cancel",
+                        tokens_received=tokens_received,
                     )
-                else:
-                    logger.error("chat_stream: result_q empty after worker join")
-                yield _sse_bytes({"type": "done"})
-                trace_event("done", status="result_queue_empty", tokens_received=tokens_received)
-                return
+
+            # 须先落库再发 done：若先发 done，浏览器/前端常会立刻断开，迭代器可能被中止，save() 来不及执行。
+            kind = peek_kind
+            payload = peek_payload
+            if kind is None:
+                try:
+                    kind, payload = result_q.get_nowait()
+                except queue.Empty:
+                    session_obj.ai_response = "[智能体调用失败]\n未收到执行结果"
+                    session_obj.save()
+                    conversation.save()
+                    if not got_token_end:
+                        yield _sse_bytes({"type": "error", "message": "智能体未返回结果"})
+                    elif tokens_received:
+                        log_warning_event(
+                            logger,
+                            "chat_stream_result_queue_empty_with_deltas",
+                            hint="check worker timeout or thread errors",
+                            tokens_received=tokens_received,
+                        )
+                    else:
+                        log_error_event(logger, "chat_stream_result_queue_empty_after_join")
+                    yield _sse_bytes({"type": "done"})
+                    trace_event("done", status="result_queue_empty", tokens_received=tokens_received)
+                    return
 
             if kind == "err":
                 err, tb = payload
@@ -374,7 +458,11 @@ class ChatStreamView(APIView):
                 if not got_token_end:
                     yield _sse_bytes({"type": "error", "message": str(err)})
                 else:
-                    logger.error("chat_stream: agent invoke failed after stream ended: %s", err, exc_info=True)
+                    log_exception_event(
+                        logger,
+                        "chat_stream_agent_invoke_failed_after_stream_end",
+                        error=str(err),
+                    )
                 yield _sse_bytes({"type": "done"})
                 trace_event("done", status="agent_error", tokens_received=tokens_received)
                 return

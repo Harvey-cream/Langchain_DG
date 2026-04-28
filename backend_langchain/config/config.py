@@ -111,6 +111,6 @@ if __name__ == "__main__":
 
     llm = get_qwen_chat_model()
     print("模型加载成功，正在回答...")
-    response = llm.invoke([HumanMessage(content="你在干什么呀，你会做什么？")])
+    response = llm.invoke([HumanMessage(content="你是哪个模型")])
     # print(response)
     print(getattr(response, "content", response))

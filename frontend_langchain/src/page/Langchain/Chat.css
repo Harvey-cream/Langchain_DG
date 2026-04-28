@@ -337,6 +337,29 @@
   min-height: 1.2em;
 }
 
+.chat-stream-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.chat-stream-progress-text {
+  line-height: 1;
+}
+
+.chat-stream-progress .loading-indicator {
+  padding: 0;
+  gap: 5px;
+}
+
+.chat-stream-progress .loading-dot {
+  width: 6px;
+  height: 6px;
+}
+
 /* 流式中：纯文本增量（避免每帧全量 Markdown 解析）；样式与 .chat-markdown 对齐，结束时切换为 remark */
 .chat-stream-plain {
   font-size: 14px;
@@ -568,6 +591,35 @@
   width: 100%;
 }
 
+.web-search-toggle {
+  flex-shrink: 0;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid #d9d9d9;
+  border-radius: 20px;
+  background: #fff;
+  color: #475569;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.web-search-toggle:hover:not(:disabled) {
+  border-color: #91caff;
+  color: #1677ff;
+}
+
+.web-search-toggle.active {
+  border-color: #1677ff;
+  background: #e6f4ff;
+  color: #1677ff;
+}
+
+.web-search-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .chat-interview-track-row {
   display: flex;
   align-items: center;
@@ -688,6 +740,59 @@
     gap: 4px;
     padding: 8px 20px;
   }
+}
+
+/* PDF 确认：嵌在同一条 AI 气泡底部 */
+.pdf-export-embedded {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.pdf-export-inline-text {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #333;
+}
+
+.pdf-export-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.pdf-export-inline-actions button {
+  padding: 4px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid #d9d9d9;
+  background: #fff;
+  color: #595959;
+}
+
+.pdf-export-inline-actions button:hover {
+  border-color: #1890ff;
+  color: #1890ff;
+}
+
+.pdf-export-inline-actions .pdf-export-confirm {
+  background: #1890ff;
+  border-color: #1890ff;
+  color: #fff;
+}
+
+.pdf-export-inline-actions .pdf-export-confirm:hover {
+  background: #40a9ff;
+  border-color: #40a9ff;
+  color: #fff;
+}
+
+.pdf-export-inline-actions .pdf-export-cancel {
+  background: #fafafa;
 }
 
 /* 滚动条样式 */

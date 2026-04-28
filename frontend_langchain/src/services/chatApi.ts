@@ -29,7 +29,12 @@ export type ChatApiClient = {
     message: string,
     conversationId: number | undefined,
     callbacks: ChatStreamCallbacks,
-    options?: { idleMs?: number; signal?: AbortSignal }
+    options?: {
+      idleMs?: number;
+      signal?: AbortSignal;
+      resumePdfExport?: boolean;
+      enableWebSearch?: boolean;
+    }
   ) => Promise<void>;
 };
 

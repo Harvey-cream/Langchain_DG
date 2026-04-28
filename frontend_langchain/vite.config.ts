@@ -26,6 +26,10 @@ export default defineConfig({
           });
         },
       },
+      '/media': {
+        target: 'http://localhost:8010',
+        changeOrigin: true,
+      },
     },
   }
 })

@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import re
 import sqlite3
 import sys
@@ -11,9 +12,17 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Optional, Sequence
 
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
+
+from human_in_the_loop.human_loop import (
+    interrupt_payload_from_updates,
+    pdf_ready_payload_from_updates,
+    strip_pdf_internal_markers,
+)
+from backend_langchain.logger_func import log_info_event, log_warning_event
 
 # 兼容两种运行方式：
 # 1) python -m backend_langchain.common.agent
@@ -160,7 +169,7 @@ def build_react_rag_agent(
     """
     LangChain 1.x：create_agent（内置 LangGraph）。
     多参数工具走模型原生 tool calling，与 MCP/RAG 兼容。
-    检查点统一用同步 SqliteSaver；流式走 graph.stream(stream_mode="messages")，勿用 astream_events（会要求异步 checkpointer）。
+    检查点统一用同步 SqliteSaver；流式走 graph.stream(stream_mode=["messages","updates"]) 以透出 interrupt，勿用 astream_events（会要求异步 checkpointer）。
     """
     llm = get_qwen_chat_model(temperature=temperature, streaming=streaming)
 
@@ -208,38 +217,210 @@ def _chunk_has_tool_calls(chunk: Any) -> bool:
     return bool(add.get("tool_calls"))
 
 
+def _tool_names_from_model_chunk(chunk: Any) -> list[str]:
+    """从流式 AI chunk 里尽量取出本轮 tool_call 名（流式下可能晚几帧才齐）。"""
+    out: list[str] = []
+    for tc in getattr(chunk, "tool_calls", None) or []:
+        if isinstance(tc, dict):
+            n = tc.get("name")
+        else:
+            n = getattr(tc, "name", None)
+        if n:
+            out.append(str(n))
+    for tcc in getattr(chunk, "tool_call_chunks", None) or []:
+        if isinstance(tcc, dict) and tcc.get("name"):
+            out.append(str(tcc["name"]))
+    for item in (getattr(chunk, "additional_kwargs", None) or {}).get("tool_calls") or []:
+        if isinstance(item, dict) and item.get("function", {}).get("name"):
+            out.append(str(item["function"]["name"]))
+    seen: set[str] = set()
+    dedup: list[str] = []
+    for n in out:
+        if n not in seen:
+            seen.add(n)
+            dedup.append(n)
+    return dedup
+
+
+def _tool_call_ids_from_model_chunk(chunk: Any) -> list[str]:
+    """从流式 AI chunk 里尽量提取 tool_call_id（不同 provider 字段形态兼容）。"""
+    out: list[str] = []
+    for tc in getattr(chunk, "tool_calls", None) or []:
+        if isinstance(tc, dict):
+            cid = tc.get("id")
+        else:
+            cid = getattr(tc, "id", None)
+        if cid:
+            out.append(str(cid))
+    for tcc in getattr(chunk, "tool_call_chunks", None) or []:
+        if isinstance(tcc, dict) and tcc.get("id"):
+            out.append(str(tcc["id"]))
+    for item in (getattr(chunk, "additional_kwargs", None) or {}).get("tool_calls") or []:
+        if isinstance(item, dict) and item.get("id"):
+            out.append(str(item["id"]))
+    seen: set[str] = set()
+    dedup: list[str] = []
+    for cid in out:
+        if cid not in seen:
+            seen.add(cid)
+            dedup.append(cid)
+    return dedup
+
+
+def _agent_tool_log_enabled() -> bool:
+    return (os.getenv("AGENT_LOG_TOOLS", "1").strip() or "1") not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
 def stream_graph_chat_model_events(
     agent: CompiledStateGraph,
     *,
-    prompt_text: str,
+    prompt_text: str = "",
     thread_id: str,
+    resume_pdf: bool | None = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Iterator[dict[str, Any]]:
     """
-    同步 stream(messages)：与 SqliteSaver + SyncPregelLoop 兼容。
-    astream_events 会走 checkpointer.aget_tuple，同步 SqliteSaver 未实现异步接口会报错。
+    同步 stream：messages + updates（捕获 interrupt）；与 SqliteSaver 兼容。
+    resume_pdf 非空时用 Command(resume=...) 继续人机协同，勿再发 HumanMessage。
     """
-    input_state: dict[str, Any] = {"messages": [HumanMessage(content=prompt_text)]}
     merged = _merge_graph_config(None, thread_id=thread_id)
+    if resume_pdf is not None:
+        input_or_cmd: Any = Command(resume=resume_pdf)
+    else:
+        input_or_cmd = {"messages": [HumanMessage(content=prompt_text)]}
     in_tool = False
-    for item in agent.stream(
-        input_state,
-        merged,
-        stream_mode="messages",
-    ):
-        if not isinstance(item, tuple) or not item:
-            continue
-        chunk = item[0]
-        if _chunk_has_tool_calls(chunk):
-            if not in_tool:
-                yield {"type": "status", "text": "🔍 查询中"}
-                in_tool = True
-            continue
-        in_tool = False
-        piece = _message_content_to_text(getattr(chunk, "content", None))
-        if piece:
-            cleaned = _strip_rag_echo_for_stream(piece)
-            if cleaned:
-                yield {"type": "delta", "text": cleaned}
+    # 从「模型发起 tool_call」到本条 ToolMessage 返回的墙钟时间（秒级内多工具则一段段累加）
+    _tool_segment_t0: float | None = None
+    pending_tool_calls: set[str] = set()
+    completed_tool_calls: set[str] = set()
+    cancelled = False
+    seen_pdf_ready: set[tuple[str, str]] = set()
+    try:
+        stream_iter = agent.stream(
+            input_or_cmd,
+            merged,
+            stream_mode=["messages", "updates"],
+        )
+        for item in stream_iter:
+            # B：仅在非工具阶段且不存在未闭环 tool_call 时允许取消，避免截断闭环。
+            if (
+                cancel_event is not None
+                and cancel_event.is_set()
+                and not in_tool
+                and not pending_tool_calls
+            ):
+                cancelled = True
+                break
+            if not isinstance(item, tuple) or len(item) != 2:
+                continue
+            mode, payload = item[0], item[1]
+            if mode not in ("messages", "updates"):
+                continue
+            if mode == "updates":
+                intr = interrupt_payload_from_updates(payload)
+                if intr:
+                    yield {"type": "interrupt", **intr}
+                pdf_evt = pdf_ready_payload_from_updates(payload)
+                if pdf_evt:
+                    key = (pdf_evt["url"], pdf_evt["filename"])
+                    if key not in seen_pdf_ready:
+                        seen_pdf_ready.add(key)
+                        yield {
+                            "type": "pdf_ready",
+                            "url": pdf_evt["url"],
+                            "filename": pdf_evt["filename"],
+                        }
+                continue
+            if mode != "messages":
+                continue
+            msg_pair = payload
+            if not isinstance(msg_pair, tuple) or not msg_pair:
+                continue
+            chunk = msg_pair[0]
+            if isinstance(chunk, ToolMessage):
+                tname = getattr(chunk, "name", None)
+                tid = getattr(chunk, "tool_call_id", None)
+                tid_s = str(tid) if tid else None
+                if tid_s:
+                    completed_tool_calls.add(tid_s)
+                    pending_tool_calls.discard(tid_s)
+                if _agent_tool_log_enabled():
+                    if _tool_segment_t0 is not None:
+                        duration_ms = (time.perf_counter() - _tool_segment_t0) * 1000
+                    else:
+                        duration_ms = -1.0
+                    # 下一段计时：连续多条 ToolMessage（同轮多工具）从本条结束再起表
+                    _tool_segment_t0 = time.perf_counter()
+                    log_info_event(
+                        logger,
+                        "agent_tool_executed",
+                        thread_id=thread_id,
+                        tool=tname,
+                        duration_ms=round(duration_ms, 1),
+                        tool_call_id=tid,
+                    )
+                pdf_evt = pdf_ready_payload_from_updates({"_tool": chunk})
+                if pdf_evt:
+                    key = (pdf_evt["url"], pdf_evt["filename"])
+                    if key not in seen_pdf_ready:
+                        seen_pdf_ready.add(key)
+                        yield {
+                            "type": "pdf_ready",
+                            "url": pdf_evt["url"],
+                            "filename": pdf_evt["filename"],
+                        }
+                continue
+            if _chunk_has_tool_calls(chunk):
+                ids = _tool_call_ids_from_model_chunk(chunk)
+                for cid in ids:
+                    if cid not in completed_tool_calls:
+                        pending_tool_calls.add(cid)
+                if not in_tool:
+                    yield {"type": "status", "text": "🔍 查询中"}
+                    in_tool = True
+                    _tool_segment_t0 = time.perf_counter()
+                    if _agent_tool_log_enabled():
+                        names = _tool_names_from_model_chunk(chunk)
+                        log_info_event(
+                            logger,
+                            "agent_tool_invoke",
+                            thread_id=thread_id,
+                            requested_tools=names if names else "(name pending in stream)",
+                            requested_tool_call_ids=ids if ids else "(id pending in stream)",
+                        )
+                continue
+            in_tool = False
+            _tool_segment_t0 = None
+            piece = _message_content_to_text(getattr(chunk, "content", None))
+            if piece:
+                cleaned = strip_pdf_internal_markers(_strip_rag_echo_for_stream(piece))
+                if cleaned:
+                    yield {"type": "delta", "text": cleaned}
+    except Exception:
+        # C：工具异常时输出闭环诊断，确保定位到未回填的 tool_call_id。
+        if pending_tool_calls:
+            log_warning_event(
+                logger,
+                "agent_tool_call_unresolved_on_exception",
+                thread_id=thread_id,
+                pending_tool_call_ids=sorted(pending_tool_calls),
+                completed_tool_call_ids=sorted(completed_tool_calls),
+            )
+        raise
+    if pending_tool_calls and _agent_tool_log_enabled():
+        log_warning_event(
+            logger,
+            "agent_tool_call_unresolved_on_stream_end",
+            thread_id=thread_id,
+            pending_tool_call_ids=sorted(pending_tool_calls),
+            completed_tool_call_ids=sorted(completed_tool_calls),
+            cancelled=cancelled,
+        )
 
 
 # =============================================================================
@@ -306,13 +487,18 @@ def get_interview_agent_executor(
 
 
 def get_cached_agent_executor(
-    *, temperature: float = 0.45, streaming: bool = False
+    *,
+    temperature: float = 0.45,
+    streaming: bool = False,
+    enable_web_search: bool = False,
 ) -> CompiledStateGraph:
     """主智能体执行器缓存（实现见 Langchain_Agent.main_agent）。"""
     import Langchain_Agent.main_agent as main_agent
 
     return main_agent.get_cached_agent_executor(
-        temperature=temperature, streaming=streaming
+        temperature=temperature,
+        streaming=streaming,
+        enable_web_search=enable_web_search,
     )
 
 
@@ -324,8 +510,12 @@ def warmup_agent_executors(*, temperature: float = 0.45) -> None:
     import Langchain_Agent.main_agent as main_agent
     import Langchain_Agent1.interview_agent as interview_agent
 
-    main_agent.get_cached_agent_executor(temperature=temperature, streaming=False)
-    main_agent.get_cached_agent_executor(temperature=temperature, streaming=True)
+    main_agent.get_cached_agent_executor(
+        temperature=temperature, streaming=False, enable_web_search=False
+    )
+    main_agent.get_cached_agent_executor(
+        temperature=temperature, streaming=True, enable_web_search=False
+    )
     interview_agent.get_interview_agent_executor(
         temperature=temperature, streaming=False
     )
@@ -359,6 +549,7 @@ def chat(
     mcp_input_reader: Optional[Callable[[], str]] = None,
     memory_context: str = "",
     temperature: float = 0.45,
+    enable_web_search: bool = False,
 ) -> str:
     """
     框架入口：create_agent + 工具（RAG / MCP）（实现见 Langchain_Agent.main_agent）。
@@ -376,6 +567,7 @@ def chat(
         mcp_input_reader=mcp_input_reader,
         memory_context=memory_context,
         temperature=temperature,
+        enable_web_search=enable_web_search,
     )
 
 

@@ -9,6 +9,9 @@ from queue import Queue
 
 from langchain_core.callbacks import BaseCallbackHandler
 
+from backend_langchain.logger_func import call_trace_callback
+from human_in_the_loop.human_loop import strip_pdf_internal_markers
+
 
 def _sse_bytes(obj: dict) -> bytes:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode("utf-8")
@@ -145,7 +148,7 @@ def _inline_visible_clean(raw: str) -> str:
     s = _strip_tool_blocks_and_incomplete(raw)
     s = _REACT_LINE_ONLY_RE.sub("", s)
     s = _INLINE_FA_STRIP_RE.sub("", s)
-    return s
+    return strip_pdf_internal_markers(s)
 
 
 def user_visible_reply_inline(full_agent_output: str) -> str:
@@ -189,12 +192,7 @@ class _NaturalLanguageToolFilterHandler(BaseCallbackHandler):
         return (self._session_visible or "").strip()
 
     def _trace(self, event: str) -> None:
-        if not self._trace_cb:
-            return
-        try:
-            self._trace_cb(event)
-        except Exception:
-            return
+        call_trace_callback(self._trace_cb, event)
 
     def _flush_emit_buffer(self, *, force: bool = False) -> None:
         if not self._emit_buf:

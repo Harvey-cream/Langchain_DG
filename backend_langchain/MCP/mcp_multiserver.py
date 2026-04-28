@@ -4,9 +4,9 @@
 配置优先级（后者覆盖前者仅当未提供时回退）：
 1. MCP_SERVERS_CONFIG：JSON 文件路径（绝对路径，或相对 backend_langchain 根目录）。
 2. MCP_SERVERS_JSON：整段 JSON 字符串，结构与 MultiServerMCPClient 一致。
-3. 若以上均未设置：自动读取 backend_langchain/config/mcp_servers.json（存在则加载）。
+3. 若以上均未设置：自动读取 backend_langchain/MCP/mcp_servers.json（存在则加载）。
 
-请将 config/mcp_servers.example.json 复制为 config/mcp_servers.json，写入真实 Token（该文件已 .gitignore）。
+请将 MCP/mcp_servers.example.json 复制为 MCP/mcp_servers.json，写入真实 Token（该文件已 .gitignore）。
 Authorization 必须是 "Bearer ghp_xxxx" 这种形式，不要把令牌包在 < > 里，否则远端会 400。
 GitHub 远程 MCP文档：https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md
 Gitee：https://help.gitee.com/ai-productivity/mcp-server
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 _mcp_tools_cache: list[Any] | None = None
 _mcp_load_attempted = False
 _mcp_lock = threading.Lock()
-_DEFAULT_MCP_CONFIG = "config/mcp_servers.json"
+_DEFAULT_MCP_CONFIG = "MCP/mcp_servers.json"
 
 
 def _backend_root() -> Path:
@@ -100,3 +100,4 @@ def load_mcp_tools_once() -> list[Any]:
             logger.exception("MCP：从服务端拉取工具失败")
             _mcp_tools_cache = []
         return list(_mcp_tools_cache or [])
+
