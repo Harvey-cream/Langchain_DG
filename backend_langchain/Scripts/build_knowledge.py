@@ -186,7 +186,7 @@ def main() -> None:
     p.add_argument(
         "--collection-name",
         default="md_knowledge",
-        help="各分区内 collection 名（须与 Langchain_Agent1/tools.py 中 _COLLECTION_NAME 一致）",
+        help="各分区内 collection 名（须与 Langchain_Agent/tools/interview_rag.py 中 _COLLECTION_NAME 一致）",
     )
     p.add_argument(
         "--embedding-model",

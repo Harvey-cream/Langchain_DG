@@ -24,7 +24,6 @@ urlpatterns = [
     # 用户相关API
     path('api/user/', include('User.urls')),
     path('', include('Langchain_Agent.urls')),
-    path('', include('Langchain_Agent1.urls')),
 ]
 
 if settings.DEBUG:

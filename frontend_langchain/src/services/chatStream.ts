@@ -6,40 +6,11 @@
  * 每次 delta 会在控制台打印 [chatStream] / [Chat] 与时间戳，用于确认是否「边收边回调」。
  */
 
-// --- 展示：ReAct 只给用户看 Final Answer 之后（与后端 SSE 分割规则一致：支持全角冒号、可选 **）---
-const FINAL_ANSWER_SPLIT = /(?:^|\n)\s*\*{0,2}Final Answer\*{0,2}\s*(?::|：)\s*/i;
-const FINAL_ANSWER_START = /^\s*\*{0,2}Final Answer\*{0,2}\s*(?::|：)\s*/i;
-/** Final Answer 正文后模型又续写一轮 Question/Thought/… 时截断（与后端 SSE 一致，含 **。Thought: 同行续写） */
-const REACT_RESTART_AFTER_FINAL =
-  /\n\s*(?:\*\*)?(?:Question|Thought|Action|Action Input|Observation)\s*(?::|：)\s*|\*\*\s*[。！？]\s*\*{0,2}Thought\s*(?::|：)\s*|(?<=[。！？])\s*Thought\s*(?::|：)\s*/i;
-
-/** 正文里误重复写的第二处「Final Answer:」（与后端 SSE 一致） */
-const INLINE_DUP_FINAL_ANSWER =
-  /(?:\n[\t ]*){1,2}\*{0,2}Final Answer\*{0,2}\s*(?::|：)?\s*|(?<=[。！？,，、.])\s*\*{0,2}Final Answer\*{0,2}\s*(?::|：)?\s*/gi;
-
-/** 与后端内联工具流一致：去掉 <tool>...</tool>，避免偶发漏网展示 */
+// --- 展示：流式 Markdown 修补（后端已用原生 tool calling，不再剥 ReAct/Final Answer）---
 const INLINE_TOOL_BLOCK = /<tool\s+name\s*=\s*["']([^"']+)["']\s*>[\s\S]*?<\/tool>/gi;
-/** 单行 ReAct 抬头（后端已滤；前端兜底） */
-const REACT_LINE_ONLY = /^\s*(?:Question|Thought|Action|Action Input|Observation)\s*[:：].*$/gim;
 
 function stripInlineToolBlocks(body: string): string {
   return body.replace(INLINE_TOOL_BLOCK, '');
-}
-
-function stripReactLinesOnly(body: string): string {
-  return body.replace(REACT_LINE_ONLY, '');
-}
-
-function stripDuplicateFinalAnswerLabels(body: string): string {
-  return body.replace(INLINE_DUP_FINAL_ANSWER, '');
-}
-
-function stripRepeatedReactAfterFinal(body: string): string {
-  const m = REACT_RESTART_AFTER_FINAL.exec(body);
-  if (m && m.index !== undefined) return body.slice(0, m.index).trimEnd();
-  // 模型偶发在同一行末尾续写 Thought:（无前导换行）
-  const tail = body.replace(/(?:\s+|^)(?:\*\*)?Thought\s*(?::|：)[^\n]*$/i, '').trimEnd();
-  return tail;
 }
 
 function normalizeFenceHeaderAndBody(line: string): string {
@@ -115,10 +86,8 @@ export function formatAssistantDisplayText(
   options?: { streaming?: boolean }
 ): string {
   const streaming = Boolean(options?.streaming);
-  let s = (raw || '').trim();
+  let s = stripInlineToolBlocks((raw || '').trim());
   if (!s) return '';
-  s = stripInlineToolBlocks(s);
-  s = stripReactLinesOnly(s);
 
   const stripStreamingToolTail = (out: string): string => {
     if (!streaming) return out;
@@ -126,27 +95,6 @@ export function formatAssistantDisplayText(
     if (m && m.index !== undefined) return out.slice(0, m.index).replace(/<\s*$/g, '');
     return out.replace(/<\s*$/g, '');
   };
-
-  const afterMarker = s.match(FINAL_ANSWER_SPLIT);
-  if (afterMarker && afterMarker.index !== undefined) {
-    let body = s.slice(afterMarker.index + afterMarker[0].length);
-    body = stripDuplicateFinalAnswerLabels(stripRepeatedReactAfterFinal(body));
-    const normalized = normalizeChatWhitespace(body);
-    return stripStreamingToolTail(repairStreamingMarkdown(normalized, streaming));
-  }
-
-  const startFinal = s.match(FINAL_ANSWER_START);
-  if (startFinal && startFinal.index === 0) {
-    let body = s.slice(startFinal[0].length);
-    body = stripDuplicateFinalAnswerLabels(stripRepeatedReactAfterFinal(body));
-    const normalized = normalizeChatWhitespace(body);
-    return stripStreamingToolTail(repairStreamingMarkdown(normalized, streaming));
-  }
-
-  // 仍含 ReAct 痕迹则宁可空白，也不要把 Thought/Action/Observation 整段展示
-  if (/(?:^|\n)\s*(?:Question|Thought|Action|Action Input|Observation)\s*[:：]/im.test(s)) {
-    return '';
-  }
 
   const normalized = normalizeChatWhitespace(s);
   return stripStreamingToolTail(repairStreamingMarkdown(normalized, streaming));

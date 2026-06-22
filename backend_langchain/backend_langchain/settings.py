@@ -84,7 +84,6 @@ INSTALLED_APPS = [
     # 自定义应用
     'User',
     'Langchain_Agent.apps.LangchainAgentConfig',
-    'Langchain_Agent1.apps.LangchainAgent1Config',
 ]
 
 MIDDLEWARE = [

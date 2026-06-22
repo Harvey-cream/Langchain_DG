@@ -17,6 +17,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
+from Agent_memory.memory import maybe_compress_history
 from human_in_the_loop.human_loop import (
     interrupt_payload_from_updates,
     pdf_ready_payload_from_updates,
@@ -33,7 +34,7 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(project_root))
 
 from config.config import get_qwen_chat_model
-from Langchain_Agent.utils.answer_format_prompt import wrap_user_message_for_agent
+from Langchain_Agent.prompts import wrap_agent_user_message
 from Langchain_Agent.tools import get_all_agent_tools
 
 logger = logging.getLogger(__name__)
@@ -292,6 +293,16 @@ def stream_graph_chat_model_events(
     if resume_pdf is not None:
         input_or_cmd: Any = Command(resume=resume_pdf)
     else:
+        # resume_pdf 阶段处于 interrupt 闭环中，禁止改写 state，否则会破坏 PDF 人机协同。
+        try:
+            maybe_compress_history(agent, thread_id=thread_id)
+        except Exception as e:  # noqa: BLE001
+            log_warning_event(
+                logger,
+                "memory_compress_skipped_due_to_error",
+                thread_id=thread_id,
+                error=str(e),
+            )
         input_or_cmd = {"messages": [HumanMessage(content=prompt_text)]}
     in_tool = False
     # 从「模型发起 tool_call」到本条 ToolMessage 返回的墙钟时间（秒级内多工具则一段段累加）
@@ -424,7 +435,7 @@ def stream_graph_chat_model_events(
 
 
 # =============================================================================
-# 非流式：同步 invoke 一整轮（返回最终 output；用于 chat / chat_interview / cli）
+# 同步 invoke（仅 CLI / 诊断脚本）
 # =============================================================================
 
 
@@ -439,6 +450,16 @@ def _invoke_agent_sync(
     使用同步 invoke：SqliteSaver 仅实现同步 checkpoint API，ainvoke 会走异步存储导致报错。
     可选 AGENT_MAX_EXECUTION_TIME：在无运行中 event loop 的线程里用线程池做超时（与原先 wait_for 语义相近）。
     """
+    try:
+        maybe_compress_history(agent, thread_id=thread_id)
+    except Exception as e:  # noqa: BLE001
+        log_warning_event(
+            logger,
+            "memory_compress_skipped_due_to_error",
+            thread_id=thread_id,
+            error=str(e),
+        )
+
     input_state: dict[str, Any] = {"messages": [HumanMessage(content=prompt_text)]}
     merged = _merge_graph_config(config, thread_id=thread_id)
     t_raw = os.getenv("AGENT_MAX_EXECUTION_TIME", "").strip()
@@ -468,107 +489,13 @@ def _invoke_agent_sync(
     )
 
 
-# =============================================================================
-# 非流式：门面（委托 Langchain_Agent.main_agent / Langchain_Agent1.interview_agent）
-# =============================================================================
-
-
-def get_interview_agent_executor(
-    *,
-    temperature: float = 0.45,
-    streaming: bool = False,
-) -> CompiledStateGraph:
-    """面试大师执行器缓存（实现见 Langchain_Agent1.interview_agent）。"""
-    import Langchain_Agent1.interview_agent as interview_agent
-
-    return interview_agent.get_interview_agent_executor(
-        temperature=temperature, streaming=streaming
-    )
-
-
-def get_cached_agent_executor(
-    *,
-    temperature: float = 0.45,
-    streaming: bool = False,
-    enable_web_search: bool = False,
-) -> CompiledStateGraph:
-    """主智能体执行器缓存（实现见 Langchain_Agent.main_agent）。"""
-    import Langchain_Agent.main_agent as main_agent
-
-    return main_agent.get_cached_agent_executor(
-        temperature=temperature,
-        streaming=streaming,
-        enable_web_search=enable_web_search,
-    )
-
-
 def warmup_agent_executors(*, temperature: float = 0.45) -> None:
-    """
-    进程启动时构建四套 CompiledStateGraph 单例（普通/面试 × 流式/非流式），
-    避免首个用户请求才加载 LLM 客户端与图。
-    """
-    import Langchain_Agent.main_agent as main_agent
-    import Langchain_Agent1.interview_agent as interview_agent
+    """进程启动时预热两个流式图，避免首请求冷启动。"""
+    from Langchain_Agent import agents
 
-    main_agent.get_cached_agent_executor(
-        temperature=temperature, streaming=False, enable_web_search=False
-    )
-    main_agent.get_cached_agent_executor(
-        temperature=temperature, streaming=True, enable_web_search=False
-    )
-    interview_agent.get_interview_agent_executor(
-        temperature=temperature, streaming=False
-    )
-    interview_agent.get_interview_agent_executor(
-        temperature=temperature, streaming=True
-    )
-
-
-def chat_interview(
-    user_input: str,
-    *,
-    thread_id: str,
-    memory_context: str = "",
-    temperature: float = 0.45,
-) -> str:
-    """面试大师：见 Langchain_Agent1.utils.prompt（实现见 Langchain_Agent1.interview_agent）。"""
-    import Langchain_Agent1.interview_agent as interview_agent
-
-    return interview_agent.chat_interview(
-        user_input,
-        thread_id=thread_id,
-        memory_context=memory_context,
-        temperature=temperature,
-    )
-
-
-def chat(
-    user_input: str,
-    *,
-    thread_id: str,
-    mcp_input_reader: Optional[Callable[[], str]] = None,
-    memory_context: str = "",
-    temperature: float = 0.45,
-    enable_web_search: bool = False,
-) -> str:
-    """
-    框架入口：create_agent + 工具（RAG / MCP）（实现见 Langchain_Agent.main_agent）。
-
-    参数说明：
-    - `user_input`：最终喂给 agent 的文本
-    - `thread_id`：与 Django 会话对齐的 LangGraph 线程 id（见 agent_checkpoint_thread_id）
-    - `mcp_input_reader`：未来你可以传入 MCP 客户端来“读取用户输入”，此处默认不启用
-    """
-    import Langchain_Agent.main_agent as main_agent
-
-    return main_agent.chat(
-        user_input,
-        thread_id=thread_id,
-        mcp_input_reader=mcp_input_reader,
-        memory_context=memory_context,
-        temperature=temperature,
-        enable_web_search=enable_web_search,
-    )
+    agents.get_stream_agent_executor(temperature=temperature, enable_web_search=False)
+    agents.get_stream_agent_executor(temperature=temperature, enable_web_search=True)
+    agents.get_stream_interview_executor(temperature=temperature)
 
 
 def _default_mcp_input_reader(prompt: str = "User: ") -> str:
@@ -599,7 +526,7 @@ def cli():
         if user_input.strip().lower() in {"exit", "quit", "q"}:
             print("bye")
             return
-        prompt = wrap_user_message_for_agent(user_input)
+        prompt = wrap_agent_user_message(user_input)
         out = _invoke_agent_sync(agent, prompt, thread_id=cli_thread)
         print(out.get("output") if isinstance(out, dict) else out)
 

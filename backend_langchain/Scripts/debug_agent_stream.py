@@ -1,4 +1,4 @@
-"""复现 LangGraph 流式 / 同步 invoke；打印完整异常栈。"""
+"""复现 LangGraph 流式；打印完整异常栈。"""
 from __future__ import annotations
 
 import sys
@@ -8,24 +8,18 @@ from pathlib import Path
 _root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_root))
 
-from common.agent import (
-    _invoke_agent_sync,
-    get_cached_agent_executor,
-    warmup_agent_executors,
-)
-from Langchain_Agent.main_agent import stream_agent
-from Langchain_Agent.utils.answer_format_prompt import wrap_inline_tool_user_message
+from Langchain_Agent.agents import get_stream_agent_executor, stream_agent
+from common.agent import warmup_agent_executors
+from Langchain_Agent.prompts import wrap_agent_user_message
 
 THREAD = "debug:cli:1"
-PROMPT = wrap_inline_tool_user_message(
+PROMPT = wrap_agent_user_message(
     "Say hello in one short English sentence. Do not use tools.",
-    memory_context="",
-    skill_context="",
 )
 
 
 def main() -> None:
-    print("--- 1) warmup_agent_executors ---")
+    print("--- warmup ---")
     try:
         warmup_agent_executors()
         print("ok")
@@ -33,20 +27,12 @@ def main() -> None:
         traceback.print_exc()
         return
 
-    print("--- 2) sync invoke (streaming=False graph) ---")
+    print("--- stream_agent ---")
     try:
-        agent = get_cached_agent_executor(streaming=False)
-        out = _invoke_agent_sync(agent, PROMPT, thread_id=THREAD)
-        print("output:", (out.get("output") or "")[:200])
-    except Exception:
-        traceback.print_exc()
-        return
-
-    print("--- 3) stream_agent (streaming graph, sync messages stream) ---")
-    try:
+        get_stream_agent_executor()
         n = 0
         for evt in stream_agent(
-            prompt_text=PROMPT, thread_id=THREAD + ":stream", temperature=0.45
+            prompt_text=PROMPT, thread_id=THREAD, temperature=0.45
         ):
             n += 1
             print("evt", n, evt)
