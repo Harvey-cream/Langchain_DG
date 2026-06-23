@@ -1,6 +1,6 @@
 version: "3"
 
-# Lanchain_DG：MySQL(db) + Redis + Django(backend) + Nginx（官方镜像 + 挂载 ./nginx）
+# Lanchain_DG：MySQL(db) + Redis + FastAPI(backend) + Nginx（官方镜像 + 挂载 ./nginx）
 # 先构建前端：cd frontend_langchain && npm ci && npm run build
 # docker compose up -d --build
 
@@ -41,10 +41,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    # MySQL / Django / Gunicorn / LLM 默认走 env/settings_pro.yaml；要覆盖再加环境变量或改 yaml
+    # MySQL / FastAPI / LLM 默认走 env/settings_pro.yaml；要覆盖再加环境变量或改 yaml
     # HuggingFace：国内默认 hf-mirror；出访正常可设 HF_ENDPOINT=https://huggingface.co
     environment:
-      - DJANGO_ENV=${DJANGO_ENV:-production}
+      - APP_ENV=${APP_ENV:-${DJANGO_ENV:-production}}
       # 生产环境向量 API（见 common/embedding.py）；密钥勿写进镜像，用 .env 注入
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
       - DASHSCOPE_EMBEDDING_MODEL=${DASHSCOPE_EMBEDDING_MODEL:-text-embedding-v3}

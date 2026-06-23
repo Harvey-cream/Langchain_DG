@@ -82,7 +82,7 @@ def finalize_pdf_export(title: str, body_markdown: str) -> str:
         if "缺少依赖" in hint or "markdown" in hint.lower():
             return (
                 "[系统] PDF 生成失败：后端未安装 markdown/xhtml2pdf，或 pip 装在了别的 Python 环境。"
-                "请对**运行 runserver 用的解释器**执行 pip install markdown xhtml2pdf 后重试。"
+                "请对**运行后端的同一 Python 解释器**执行 pip install markdown xhtml2pdf 后重试。"
             )
         return "[系统] PDF 生成失败，请用自然语言向用户致歉并建议稍后重试，勿伪造下载链接。"
 

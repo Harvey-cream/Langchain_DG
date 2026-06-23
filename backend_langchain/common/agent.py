@@ -1,19 +1,18 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
-import time
 import re
-import sqlite3
 import sys
-import threading
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+import time
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Callable, Iterator, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
@@ -42,31 +41,31 @@ logger = logging.getLogger(__name__)
 CHECKPOINT_SQLITE_PATH = (
     Path(__file__).resolve().parent / "data" / "langgraph_checkpoints.sqlite3"
 )
-_sqlite_checkpointer: SqliteSaver | None = None
-_sqlite_checkpointer_lock = threading.Lock()
+_checkpointer: AsyncSqliteSaver | None = None
+_checkpointer_ctx: Any = None
 
 
-# =============================================================================
-# 公共：检查点、线程 id、消息解析、invoke 结果规整、图配置与步数上限
-# （流式与非流式共用，不区分 stream / invoke）
-# =============================================================================
+async def init_checkpointer() -> AsyncSqliteSaver:
+    global _checkpointer, _checkpointer_ctx
+    if _checkpointer is None:
+        CHECKPOINT_SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _checkpointer_ctx = AsyncSqliteSaver.from_conn_string(str(CHECKPOINT_SQLITE_PATH))
+        _checkpointer = await _checkpointer_ctx.__aenter__()
+    return _checkpointer
 
 
-def get_sqlite_checkpointer() -> SqliteSaver:
-    """LangGraph 会话状态持久化（与 Django 会话的 conversation_id 通过 thread_id 对应）。"""
-    global _sqlite_checkpointer
-    with _sqlite_checkpointer_lock:
-        if _sqlite_checkpointer is None:
-            CHECKPOINT_SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(
-                str(CHECKPOINT_SQLITE_PATH),
-                check_same_thread=False,
-            )
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            _sqlite_checkpointer = SqliteSaver(conn)
-        return _sqlite_checkpointer
+async def close_checkpointer() -> None:
+    global _checkpointer, _checkpointer_ctx
+    if _checkpointer_ctx is not None:
+        await _checkpointer_ctx.__aexit__(None, None, None)
+    _checkpointer = None
+    _checkpointer_ctx = None
+
+
+def get_checkpointer() -> AsyncSqliteSaver:
+    if _checkpointer is None:
+        raise RuntimeError("checkpointer 未初始化，请在应用 lifespan 中调用 init_checkpointer()")
+    return _checkpointer
 
 
 def agent_checkpoint_thread_id(user_id: int, conversation_id: int) -> str:
@@ -77,7 +76,7 @@ def interview_checkpoint_thread_id(user_id: int, conversation_id: int) -> str:
     return f"interview:{user_id}:{conversation_id}"
 
 
-def _message_content_to_text(content: Any) -> str:
+def message_content_to_text(content: Any) -> str:
     if content is None:
         return ""
     if isinstance(content, str):
@@ -105,12 +104,12 @@ def _last_ai_text_from_agent_result(result: Any) -> str:
         return str(result)
     for msg in reversed(messages):
         if isinstance(msg, AIMessage):
-            text = _message_content_to_text(msg.content).strip()
+            text = message_content_to_text(msg.content).strip()
             if text:
                 return text
     for msg in reversed(messages):
         if isinstance(msg, AIMessage):
-            return _message_content_to_text(msg.content).strip()
+            return message_content_to_text(msg.content).strip()
     return ""
 
 
@@ -169,8 +168,7 @@ def build_react_rag_agent(
 ) -> CompiledStateGraph:
     """
     LangChain 1.x：create_agent（内置 LangGraph）。
-    多参数工具走模型原生 tool calling，与 MCP/RAG 兼容。
-    检查点统一用同步 SqliteSaver；流式走 graph.stream(stream_mode=["messages","updates"]) 以透出 interrupt，勿用 astream_events（会要求异步 checkpointer）。
+    检查点使用 AsyncSqliteSaver；流式走 graph.astream(stream_mode=["messages","updates"])。
     """
     llm = get_qwen_chat_model(temperature=temperature, streaming=streaming)
 
@@ -178,7 +176,7 @@ def build_react_rag_agent(
         tools = list(get_all_agent_tools())
 
     tools_list = list(tools)
-    checkpointer = get_sqlite_checkpointer()
+    checkpointer = get_checkpointer()
 
     return create_agent(
         llm,
@@ -277,25 +275,24 @@ def _agent_tool_log_enabled() -> bool:
     }
 
 
-def stream_graph_chat_model_events(
+async def stream_graph_chat_model_events(
     agent: CompiledStateGraph,
     *,
     prompt_text: str = "",
     thread_id: str,
     resume_pdf: bool | None = None,
-    cancel_event: Optional[threading.Event] = None,
-) -> Iterator[dict[str, Any]]:
+    cancel_event: Optional[asyncio.Event] = None,
+) -> AsyncIterator[dict[str, Any]]:
     """
-    同步 stream：messages + updates（捕获 interrupt）；与 SqliteSaver 兼容。
+    异步 stream：messages + updates（捕获 interrupt）；与 AsyncSqliteSaver 兼容。
     resume_pdf 非空时用 Command(resume=...) 继续人机协同，勿再发 HumanMessage。
     """
     merged = _merge_graph_config(None, thread_id=thread_id)
     if resume_pdf is not None:
         input_or_cmd: Any = Command(resume=resume_pdf)
     else:
-        # resume_pdf 阶段处于 interrupt 闭环中，禁止改写 state，否则会破坏 PDF 人机协同。
         try:
-            maybe_compress_history(agent, thread_id=thread_id)
+            await maybe_compress_history(agent, thread_id=thread_id)
         except Exception as e:  # noqa: BLE001
             log_warning_event(
                 logger,
@@ -305,19 +302,17 @@ def stream_graph_chat_model_events(
             )
         input_or_cmd = {"messages": [HumanMessage(content=prompt_text)]}
     in_tool = False
-    # 从「模型发起 tool_call」到本条 ToolMessage 返回的墙钟时间（秒级内多工具则一段段累加）
     _tool_segment_t0: float | None = None
     pending_tool_calls: set[str] = set()
     completed_tool_calls: set[str] = set()
     cancelled = False
     seen_pdf_ready: set[tuple[str, str]] = set()
     try:
-        stream_iter = agent.stream(
+        async for item in agent.astream(
             input_or_cmd,
             merged,
             stream_mode=["messages", "updates"],
-        )
-        for item in stream_iter:
+        ):
             # B：仅在非工具阶段且不存在未闭环 tool_call 时允许取消，避免截断闭环。
             if (
                 cancel_event is not None
@@ -407,7 +402,7 @@ def stream_graph_chat_model_events(
                 continue
             in_tool = False
             _tool_segment_t0 = None
-            piece = _message_content_to_text(getattr(chunk, "content", None))
+            piece = message_content_to_text(getattr(chunk, "content", None))
             if piece:
                 cleaned = strip_pdf_internal_markers(_strip_rag_echo_for_stream(piece))
                 if cleaned:
@@ -435,23 +430,19 @@ def stream_graph_chat_model_events(
 
 
 # =============================================================================
-# 同步 invoke（仅 CLI / 诊断脚本）
+# CLI invoke
 # =============================================================================
 
 
-def _invoke_agent_sync(
+async def _invoke_agent(
     agent: CompiledStateGraph,
     prompt_text: str,
     *,
     config: dict[str, Any] | None = None,
     thread_id: str,
 ) -> dict[str, Any]:
-    """
-    使用同步 invoke：SqliteSaver 仅实现同步 checkpoint API，ainvoke 会走异步存储导致报错。
-    可选 AGENT_MAX_EXECUTION_TIME：在无运行中 event loop 的线程里用线程池做超时（与原先 wait_for 语义相近）。
-    """
     try:
-        maybe_compress_history(agent, thread_id=thread_id)
+        await maybe_compress_history(agent, thread_id=thread_id)
     except Exception as e:  # noqa: BLE001
         log_warning_event(
             logger,
@@ -462,31 +453,8 @@ def _invoke_agent_sync(
 
     input_state: dict[str, Any] = {"messages": [HumanMessage(content=prompt_text)]}
     merged = _merge_graph_config(config, thread_id=thread_id)
-    t_raw = os.getenv("AGENT_MAX_EXECUTION_TIME", "").strip()
-
-    def _call() -> dict[str, Any]:
-        raw = agent.invoke(input_state, config=merged)
-        return _normalize_agent_result(raw)
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        if not t_raw:
-            return _call()
-        try:
-            timeout = float(t_raw)
-        except ValueError:
-            return _call()
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(_call)
-            try:
-                return fut.result(timeout=timeout)
-            except FuturesTimeout as e:
-                raise TimeoutError(f"agent invoke 超过 {timeout} 秒") from e
-    raise RuntimeError(
-        "当前线程已有 event loop，请在本路径改为 await agent.ainvoke(...) "
-        "或使用同步 WSGI 线程调用超级智能体。"
-    )
+    raw = await agent.ainvoke(input_state, config=merged)
+    return _normalize_agent_result(raw)
 
 
 def warmup_agent_executors(*, temperature: float = 0.45) -> None:
@@ -499,22 +467,15 @@ def warmup_agent_executors(*, temperature: float = 0.45) -> None:
 
 
 def _default_mcp_input_reader(prompt: str = "User: ") -> str:
-    """
-    这里先提供一个“框架级”的 MCP 输入读取接口：
-    - 你未来可以替换成真正的 MCP 客户端（例如通过 MCP server 工具获取输入）
-    - 现在先回退到标准输入，保证框架能跑通 ReAct + RAG
-    """
-    # 兼容：允许外部通过环境变量注入用户输入（便于联调）
     injected = os.getenv("MCP_USER_INPUT")
     if injected:
         return injected
     return input(prompt)
 
 
-def cli():
+async def _cli_async() -> None:
     agent = build_react_rag_agent(verbose=True)
     cli_thread = "cli-repl"
-
     mcp_reader = _default_mcp_input_reader
     while True:
         try:
@@ -522,13 +483,16 @@ def cli():
         except (EOFError, KeyboardInterrupt):
             print("\nbye")
             return
-
         if user_input.strip().lower() in {"exit", "quit", "q"}:
             print("bye")
             return
         prompt = wrap_agent_user_message(user_input)
-        out = _invoke_agent_sync(agent, prompt, thread_id=cli_thread)
+        out = await _invoke_agent(agent, prompt, thread_id=cli_thread)
         print(out.get("output") if isinstance(out, dict) else out)
+
+
+def cli() -> None:
+    asyncio.run(_cli_async())
 
 
 if __name__ == "__main__":

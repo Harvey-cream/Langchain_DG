@@ -3,15 +3,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-import threading
 from difflib import SequenceMatcher
 from typing import Any, Callable
 
-from django.db import close_old_connections
-from django.db.models import Model
 from langchain_core.messages import HumanMessage
+from sqlalchemy import update
 
 from backend_langchain.logger_func import log_exception_event
 from config.config import get_qwen_chat_model
@@ -194,20 +193,26 @@ def schedule_async_title_polish(
     user_id: int,
     user_message: str,
     polish_fn: Callable[[str], str],
-    model: type[Model],
-    thread_name_prefix: str,
+    table: Any,
     log_context: str,
 ) -> None:
-    """主流程已用 fallback 标题落库后，在后台线程调用 polish_fn 并 update 会话 title。"""
+    """主流程已用 fallback 标题落库后，后台润色并 update 会话 title。"""
     if not (user_message or "").strip():
         return
 
-    def _run() -> None:
-        close_old_connections()
+    async def _run() -> None:
+        from app.db import SessionLocal
+
         try:
             polished = polish_fn(user_message)
             title = (polished or "")[:255]
-            model.objects.filter(pk=conversation_id, user_id=user_id).update(title=title)
+            async with SessionLocal() as session:
+                await session.execute(
+                    update(table)
+                    .where(table.id == conversation_id, table.user_id == user_id)
+                    .values(title=title)
+                )
+                await session.commit()
         except Exception:
             log_exception_event(
                 logger,
@@ -216,11 +221,5 @@ def schedule_async_title_polish(
                 conversation_id=conversation_id,
                 user_id=user_id,
             )
-        finally:
-            close_old_connections()
 
-    threading.Thread(
-        target=_run,
-        name=f"{thread_name_prefix}-{conversation_id}",
-        daemon=True,
-    ).start()
+    asyncio.create_task(_run())

@@ -1,9 +1,9 @@
 """两个独立 LangGraph Agent：超级智能体 + 面试大师。"""
-
 from __future__ import annotations
 
-import threading
-from typing import Any, Iterator, Optional
+import asyncio
+from collections.abc import AsyncIterator
+from typing import Any
 
 from langgraph.graph.state import CompiledStateGraph
 
@@ -33,26 +33,27 @@ def get_stream_agent_executor(
     return target
 
 
-def stream_agent(
+async def stream_agent(
     *,
     prompt_text: str = "",
     thread_id: str,
     temperature: float = 0.45,
     resume_pdf: bool | None = None,
     enable_web_search: bool = False,
-    cancel_event: Optional[threading.Event] = None,
-) -> Iterator[dict[str, Any]]:
+    cancel_event: asyncio.Event | None = None,
+) -> AsyncIterator[dict[str, Any]]:
     agent = get_stream_agent_executor(
         temperature=temperature,
         enable_web_search=enable_web_search,
     )
-    yield from stream_graph_chat_model_events(
+    async for evt in stream_graph_chat_model_events(
         agent,
         prompt_text=prompt_text,
         thread_id=thread_id,
         resume_pdf=resume_pdf,
         cancel_event=cancel_event,
-    )
+    ):
+        yield evt
 
 
 def get_stream_interview_executor(*, temperature: float = 0.45) -> CompiledStateGraph:
@@ -64,19 +65,20 @@ def get_stream_interview_executor(*, temperature: float = 0.45) -> CompiledState
     return _interview_stream_cache
 
 
-def stream_interview_agent(
+async def stream_interview_agent(
     *,
     prompt_text: str = "",
     thread_id: str,
     temperature: float = 0.45,
     resume_pdf: bool | None = None,
-    cancel_event: Optional[threading.Event] = None,
-) -> Iterator[dict[str, Any]]:
+    cancel_event: asyncio.Event | None = None,
+) -> AsyncIterator[dict[str, Any]]:
     agent = get_stream_interview_executor(temperature=temperature)
-    yield from stream_graph_chat_model_events(
+    async for evt in stream_graph_chat_model_events(
         agent,
         prompt_text=prompt_text,
         thread_id=thread_id,
         resume_pdf=resume_pdf,
         cancel_event=cancel_event,
-    )
+    ):
+        yield evt

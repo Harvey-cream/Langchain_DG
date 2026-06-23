@@ -43,7 +43,7 @@ def _memory_min_overflow_turns() -> int:
         return 5
 
 
-def maybe_compress_history(
+async def maybe_compress_history(
     agent: CompiledStateGraph,
     *,
     thread_id: str,
@@ -80,7 +80,7 @@ def maybe_compress_history(
 
     config = {"configurable": {"thread_id": thread_id}}
     try:
-        snapshot = agent.get_state(config)
+        snapshot = await agent.aget_state(config)
     except Exception as e:  # noqa: BLE001
         log_warning_event(
             logger,
@@ -160,7 +160,7 @@ def maybe_compress_history(
     new_msgs.extend(kept)
 
     try:
-        agent.update_state(config, {"messages": removes + new_msgs})
+        await agent.aupdate_state(config, {"messages": removes + new_msgs})
     except Exception as e:  # noqa: BLE001
         log_warning_event(
             logger,

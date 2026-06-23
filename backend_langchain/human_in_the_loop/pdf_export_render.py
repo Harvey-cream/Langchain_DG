@@ -101,7 +101,7 @@ def markdown_to_pdf_bytes(title: str, body_markdown: str) -> bytes:
         from xhtml2pdf import pisa
     except ImportError as e:
         raise RuntimeError(
-            "PDF 导出缺少依赖：请在**启动 Django 的同一 Python 解释器**中执行 "
+            "PDF 导出缺少依赖：请在**启动后端的同一 Python 解释器**中执行 "
             "`pip install markdown xhtml2pdf`（或 `pip install -r requirements.txt`）。"
             f" 当前解释器：{sys.executable}"
         ) from e
@@ -163,16 +163,16 @@ def write_conversation_pdf(title: str, body_markdown: str) -> tuple[str, str]:
 
     正文仅来自工具参数 body_markdown（由模型根据对话组织），不从数据库拉取会话内容。
     """
-    from django.conf import settings
+    from app.settings import MEDIA_ROOT, MEDIA_URL
 
-    media_root = Path(settings.MEDIA_ROOT)
+    media_root = Path(MEDIA_ROOT)
     subdir = media_root / "pdf_exports"
     subdir.mkdir(parents=True, exist_ok=True)
     name = f"{uuid4().hex}.pdf"
     path = subdir / name
     path.write_bytes(markdown_to_pdf_bytes(title, body_markdown))
 
-    base = str(settings.MEDIA_URL).rstrip("/")
+    base = str(MEDIA_URL).rstrip("/")
     rel_url = f"{base}/pdf_exports/{name}"
     download_name = f"{_slug_filename(title)}.pdf"
     return rel_url, download_name
