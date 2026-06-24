@@ -33,19 +33,12 @@ INTERVIEW_SYSTEM_PREFIX = """【角色】编程类面试陪练：像靠谱的面
 """
 
 
-def _wrap_user_message(user_text: str, system_prefix: str, skill_context: str = "") -> str:
+def wrap_user_message(user_text: str, skill_context: str = "") -> str:
+    """拼装本轮用户消息。系统前缀已由图节点注入，这里只附带可选的 Skill 路由上下文。"""
     text = (user_text or "").strip()
     if not text:
         return text
     skill = (skill_context or "").strip()
     if skill:
-        return f"{system_prefix}\n\n{skill}\n\n用户本轮问题：\n{text}"
-    return system_prefix + text
-
-
-def wrap_agent_user_message(user_text: str, skill_context: str = "") -> str:
-    return _wrap_user_message(user_text, AGENT_SYSTEM_PREFIX, skill_context)
-
-
-def wrap_interview_user_message(user_text: str, skill_context: str = "") -> str:
-    return _wrap_user_message(user_text, INTERVIEW_SYSTEM_PREFIX, skill_context)
+        return f"{skill}\n\n用户本轮问题：\n{text}"
+    return text

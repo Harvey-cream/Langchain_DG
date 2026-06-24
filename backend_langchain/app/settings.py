@@ -4,10 +4,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from common.extend import apply_hf_mirror_default
-from env.provider import settings_conf
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+# 先于 yaml / settings_conf 加载，便于本地用 .env 覆盖 production 里的 docker 主机名等
+load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR.parent / ".env")
+
+from common.extend import apply_hf_mirror_default
+from env.provider import settings_conf
 _S = settings_conf()
 _S.apply_llm_env()
 apply_hf_mirror_default()

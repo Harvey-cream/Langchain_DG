@@ -15,7 +15,7 @@ from common.extend import quick_agent_greeting_prompt, quick_interview_greeting_
 from common.skill_router import build_agent_skill_context, build_interview_skill_context
 from config.config import get_qwen_chat_model
 from Langchain_Agent.agents import stream_agent, stream_interview_agent
-from Langchain_Agent.prompts import wrap_agent_user_message, wrap_interview_user_message
+from Langchain_Agent.prompts import wrap_user_message
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,6 @@ AgentKind = Literal["main", "interview"]
 _INTERRUPT_HINT = "（请在界面点击按钮确认或取消 PDF 导出。）"
 
 _STREAM_FN = {"main": stream_agent, "interview": stream_interview_agent}
-_WRAP = {"main": wrap_agent_user_message, "interview": wrap_interview_user_message}
 _SKILL = {"main": build_agent_skill_context, "interview": build_interview_skill_context}
 _QUICK = {"main": quick_agent_greeting_prompt, "interview": quick_interview_greeting_prompt}
 
@@ -154,7 +153,7 @@ async def stream_chat_events(
             yield evt
         return
 
-    prompt = _WRAP[kind](user_input, skill_context=_SKILL[kind](user_input))
+    prompt = wrap_user_message(user_input, skill_context=_SKILL[kind](user_input))
     async for evt in _graph_events(
         kind=kind,
         prompt=prompt,

@@ -12,8 +12,8 @@ pycparser==3.0
 pycryptodomex==3.23.0
 typing_extensions==4.15.0
 tzdata==2025.3
-# LangChain 1.x：create_agent（LangGraph）；community 0.4.x 与 core 1.x 配套
-langchain>=1.2.0,<2.0
+# LangChain 1.x / LangGraph：手写 StateGraph（不再用 langchain.agents.create_agent）
+# community 仅 Scripts 建库用（HuggingFaceEmbeddings / PyPDFLoader）；text-splitters 供切分
 langchain-community>=0.4.1,<0.5
 langchain-text-splitters>=1.1.1,<2.0
 langchain-core>=1.2.10,<2.0
@@ -22,11 +22,9 @@ langgraph>=1.1.5,<1.2
 langgraph-checkpoint-sqlite>=2.0.10,<3.0
 langchain-mcp-adapters>=0.2.2,<0.3
 mcp>=1.9.2,<2
-langsmith>=0.1.17
 langchain-chroma>=1.0.0,<2.0
 chromadb>=1.3.5,<2.0
 numpy>=1.26.0,<3.0
-posthog>=2.4.0,<6.0
 python-dotenv
 PyYAML>=6.0.1,<7.0
 dashscope>=1.19.0
