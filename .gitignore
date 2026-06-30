@@ -31,6 +31,8 @@ dist-ssr
 .env.production.local
 # 虚拟环境（勿用裸 env/，会误忽略 backend_langchain/env/ 里的 YAML 配置）
 .venv/
+.venv-*/
+backend_langchain/.venv-py310/
 venv/
 /env/
 /ENV/
@@ -84,6 +86,10 @@ Thumbs.db
 logs/
 *.log
 
+# 应用密钥配置（进 example 模板；真实文件含密钥时可不提交）
+backend_langchain/env/settings_pro.yaml
+backend_langchain/env/settings_debug.yaml
+
 # MCP 服务端密钥（从 mcp_servers.example.json 复制并填写）
 backend_langchain/config/mcp_servers.json
 backend_langchain/MCP/mcp_servers.json
@@ -93,12 +99,6 @@ backend_langchain/common/data/langgraph_checkpoints.sqlite3
 backend_langchain/common/data/langgraph_checkpoints.sqlite3-shm
 backend_langchain/common/data/langgraph_checkpoints.sqlite3-wal
 
-# Chroma 本地运行期数据（检索/构建会改动，勿提交）
-backend_langchain/Langchain_knowledge/chroma_db/**/*.sqlite3
-backend_langchain/Langchain_knowledge/chroma_db/**/*.sqlite3-shm
-backend_langchain/Langchain_knowledge/chroma_db/**/*.sqlite3-wal
-backend_langchain/Langchain_knowledge/chroma_db/**/*.bin
-backend_langchain/Langchain_knowledge/chroma_db1/**/*.sqlite3
-backend_langchain/Langchain_knowledge/chroma_db1/**/*.sqlite3-shm
-backend_langchain/Langchain_knowledge/chroma_db1/**/*.sqlite3-wal
-backend_langchain/Langchain_knowledge/chroma_db1/**/*.bin
+# Chroma 向量库（本地已向量化产物，勿提交；线上 build_rag_knowledge.py 从 docs1/docs2 重建）
+backend_langchain/Langchain_knowledge/chroma/
+backend_langchain/Langchain_knowledge/chroma_db/

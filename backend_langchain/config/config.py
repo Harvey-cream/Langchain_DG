@@ -1,37 +1,104 @@
+"""
+全局配置：知识库 / 嵌入 / LLM。
+应用级配置（MySQL、LLM、DashScope、RAG）统一见 app.settings + env/settings_*.yaml。
+"""
+from __future__ import annotations
+
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 os.environ.setdefault("CHROMA_TELEMETRY", "0")
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
-from dotenv import load_dotenv
-
-# OpenAI 兼容 API：用 langchain_openai（与 openai 1.x SDK 一致），勿再用 langchain_community 里已弃用的 ChatOpenAI
-from langchain_openai import ChatOpenAI
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
 )
 from langchain_core.messages import BaseMessage
+from langchain_openai import ChatOpenAI
 
-load_dotenv()
+from app.settings import dashscope_config, llm_config, rag_config
 
-# 本地与线上同一套：只认 LLM_AGENT_*。未设置环境变量时用下列默认值（私有仓库可接受）；
-# 若设置了 LLM_AGENT_* / .env / yaml apply_llm_env，则优先用环境变量。
-# base_url 需含 /v1。
-LLM_AGENT_BASE_URL = os.getenv("LLM_AGENT_BASE_URL", "https://gpt-agent.cc/v1").strip()
-LLM_AGENT_API_KEY = os.getenv("LLM_AGENT_API_KEY", "sk-dpsaFmP9J9PHpe75yyJdvQ1xkgmfIF1oPru31peFWuzPrZ6B").strip()
-LLM_AGENT_MODEL = os.getenv("LLM_AGENT_MODEL", "gpt-5.4").strip()
+# ---------------------------------------------------------------------------
+# 路径
+# ---------------------------------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent.parent
+KNOWLEDGE_DIR_NAME = "Langchain_knowledge"
+
+_rag = rag_config()
+COLLECTION = _rag["collection"]
+TOP_K = _rag["top_k"]
+DOCS_AGENT = _rag["docs_agent"]
+DOCS_INTERVIEW = _rag["docs_interview"]
+DEFAULT_CHUNK_SIZE = _rag["chunk_size"]
+DEFAULT_CHUNK_OVERLAP = _rag["chunk_overlap"]
+DEFAULT_HF_MODEL = _rag["hf_embedding_model"]
+HF_EMBEDDING_BATCH_SIZE = _rag["hf_embedding_batch_size"]
+
+CORPUS_AGENT = "agent"
+CORPUS_INTERVIEW = "interview"
+
+DOMAIN_LABELS: dict[str, str] = {
+    "ai_programming": "AI 编程",
+    "openclaw": "OpenClaw",
+    "vibe_coding": "Vibe Coding",
+    "learn_programing": "学习路线与面试",
+    "interview_llm": "AI 大模型面试",
+    "interview_java": "Java 面试",
+    "interview_vue": "Vue 面试",
+}
+
+
+def knowledge_root() -> Path:
+    return BASE_DIR / KNOWLEDGE_DIR_NAME
+
+
+def chroma_path() -> Path:
+    return knowledge_root() / "chroma" / COLLECTION
+
+
+def list_domains(corpus: str) -> frozenset[str]:
+    root = knowledge_root()
+    if corpus == CORPUS_AGENT:
+        base = root / DOCS_AGENT
+    elif corpus == CORPUS_INTERVIEW:
+        base = root / DOCS_INTERVIEW
+    else:
+        return frozenset()
+    if not base.is_dir():
+        return frozenset()
+    return frozenset(p.name for p in base.iterdir() if p.is_dir())
+
+
+def get_domains() -> dict[str, frozenset[str]]:
+    return {
+        CORPUS_AGENT: list_domains(CORPUS_AGENT),
+        CORPUS_INTERVIEW: list_domains(CORPUS_INTERVIEW),
+    }
+
+
+def dashscope_api_key() -> str:
+    return dashscope_config()["api_key"]
+
+
+def dashscope_model_name() -> str:
+    return dashscope_config()["embedding_model"]
+
+
+def dashscope_dimensions() -> int:
+    return int(dashscope_config()["embedding_dimensions"])
+
+
+def dashscope_embedding_batch_size() -> int:
+    return int(dashscope_config()["embedding_batch_size"])
+
+
+DASHSCOPE_EMBEDDING_BASE_URL = dashscope_config()["embedding_base_url"]
 
 
 class _AgentStreamChatOpenAI(ChatOpenAI):
-    """
-    流式输出必须走 OpenAI 的 stream=True，模型侧才有逐块输出（LangGraph 下由 graph.stream(stream_mode="messages") 消费）。
-
-    - BaseChatModel._generate_with_cache：需在 kwargs 里带 stream=True 才会走 _stream 循环。
-    - ChatOpenAI._generate：若上层显式传入 stream=False，会覆盖 self.streaming，整段返回、体感像非流式。
-    构造时的 streaming=True 只设「默认」；AgentExecutor 仍可能传 stream=False，故仍需在 _generate / _agenerate / *_generate_with_cache 里强制 stream=True。
-    （用户可见「格式」由 prompt + SSE 清洗负责，与这里无关。）
-    """
+    """流式场景强制 stream=True，保证 LangGraph SSE 逐 token 输出。"""
 
     def _generate(
         self,
@@ -89,20 +156,19 @@ class _AgentStreamChatOpenAI(ChatOpenAI):
 
 
 def get_qwen_chat_model(temperature: float = 0.7, *, streaming: bool = False) -> Any:
-    """
-    获取 Chat 模型实例。
-    当前使用 OpenAI 兼容 HTTP API（默认 LLM_AGENT_BASE_URL，如 gpt-agent.cc）；经此函数接入。
-    streaming=True 时使用 _AgentStreamChatOpenAI，保证底层请求始终带 stream=True，便于 SSE 按 token 推送。
-    """
+    llm = llm_config()
+    if not llm["api_key"]:
+        raise RuntimeError(
+            "未配置对话 LLM：请在 settings_*.yaml 的 llm.api_key 或环境变量 OPENAI_API_KEY 中设置"
+        )
     common = dict(
-        model=LLM_AGENT_MODEL,
-        api_key=LLM_AGENT_API_KEY,
-        base_url=LLM_AGENT_BASE_URL,
+        model=llm["model"],
+        api_key=llm["api_key"],
+        base_url=llm["base_url"],
         temperature=temperature,
     )
     if streaming:
         return _AgentStreamChatOpenAI(**common, streaming=True)
-    # 仅非流式场景（如标题润色、同步 POST chat）：一次返回全文；与 SSE 无关
     return ChatOpenAI(**common)
 
 
@@ -112,5 +178,4 @@ if __name__ == "__main__":
     llm = get_qwen_chat_model()
     print("模型加载成功，正在回答...")
     response = llm.invoke([HumanMessage(content="你是哪个模型")])
-    # print(response)
     print(getattr(response, "content", response))

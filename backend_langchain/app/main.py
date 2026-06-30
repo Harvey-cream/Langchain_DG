@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.db import init_db_tables
 from app.routers import agent, interview, user
 from app.settings import MEDIA_ROOT
 from common.agent import close_checkpointer, init_checkpointer, warmup_agent_executors
@@ -23,7 +24,15 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await init_db_tables()
+    logger.info("database tables ready")
     await init_checkpointer()
+    try:
+        from MCP.mcp_multiserver import aload_mcp_tools_once
+
+        await aload_mcp_tools_once()
+    except Exception:
+        logger.exception("MCP startup preload failed (will retry on first tool build)")
     if os.environ.get("SKIP_RAG_STARTUP_WARMUP", "").lower() not in ("1", "true", "yes"):
         try:
             from Langchain_Agent.tools import warmup_all_tool_singletons

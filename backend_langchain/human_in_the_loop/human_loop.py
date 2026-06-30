@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Iterator
+from typing import Any
 
 from langchain_core.tools import tool
 from langgraph.types import Interrupt, interrupt
@@ -60,8 +60,11 @@ def pdf_export_interrupt_value() -> dict[str, str]:
 
 
 @tool("confirm_pdf_export")
-def confirm_pdf_export() -> str:
+async def confirm_pdf_export() -> str:
     """当用户需要导出/生成 PDF 或正式排版文档时，在输出实质条文前调用本工具一次，等待界面按钮确认。确认后继续 PDF 相关流程；取消则仅自然语言回复。"""
+    from langgraph.config import get_stream_writer
+
+    get_stream_writer()({"type": "status", "text": "等待确认 PDF 导出…"})
     approved = interrupt(pdf_export_interrupt_value())
     if approved is True:
         return PDF_EXPORT_TOOL_MSG_CONFIRM
@@ -69,12 +72,15 @@ def confirm_pdf_export() -> str:
 
 
 @tool("finalize_pdf_export")
-def finalize_pdf_export(title: str, body_markdown: str) -> str:
+async def finalize_pdf_export(title: str, body_markdown: str) -> str:
     """仅在工具 confirm_pdf_export 已返回「用户已确认」之后调用一次（勿重复调用）。根据用户指定范围与对话上下文，先在心里完成润色与排版，将最终交付用的完整 Markdown 写入 body_markdown（可含标题层级、列表、代码围栏）；title 为文档标题。调用成功后浏览器将自动下载 PDF，你只需用一两句自然话告知用户已可下载，勿复述工具返回值或任何 __ 开头的内部标记。"""
     try:
         from human_in_the_loop.pdf_export_render import write_conversation_pdf
 
         rel, fname = write_conversation_pdf(title, body_markdown)
+        from langgraph.config import get_stream_writer
+
+        get_stream_writer()({"type": "pdf_ready", "url": rel, "filename": fname})
         return f"{PDF_READY_MARKER}|{rel}|{fname}"
     except Exception as e:
         log_exception_event(logger, "finalize_pdf_export_failed")
@@ -85,56 +91,6 @@ def finalize_pdf_export(title: str, body_markdown: str) -> str:
                 "请对**运行后端的同一 Python 解释器**执行 pip install markdown xhtml2pdf 后重试。"
             )
         return "[系统] PDF 生成失败，请用自然语言向用户致歉并建议稍后重试，勿伪造下载链接。"
-
-
-def _tool_content_to_str(content: Any) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                if block.get("type") == "text" and "text" in block:
-                    parts.append(str(block["text"]))
-                elif "text" in block:
-                    parts.append(str(block["text"]))
-        return "".join(parts)
-    return str(content)
-
-
-def _iter_tool_message_texts(data: Any) -> Iterator[str]:
-    from langchain_core.messages import ToolMessage
-
-    if isinstance(data, ToolMessage):
-        yield _tool_content_to_str(data.content)
-        return
-    if isinstance(data, dict):
-        for v in data.values():
-            yield from _iter_tool_message_texts(v)
-    elif isinstance(data, (list, tuple)):
-        for x in data:
-            yield from _iter_tool_message_texts(x)
-
-
-def pdf_ready_payload_from_updates(data: Any) -> dict[str, str] | None:
-    """从 stream_mode=updates 中解析 finalize_pdf_export 的成功回传，供 SSE 触发浏览器下载。"""
-    prefix = f"{PDF_READY_MARKER}|"
-    for text in _iter_tool_message_texts(data):
-        if not text or PDF_READY_MARKER not in text:
-            continue
-        for line in text.splitlines():
-            line = line.strip()
-            if not line.startswith(prefix):
-                continue
-            rest = line[len(prefix) :]
-            url, _sep, filename = rest.rpartition("|")
-            if url and filename:
-                return {"url": url, "filename": filename}
-    return None
 
 
 def interrupt_payload_from_updates(data: Any) -> dict[str, Any] | None:

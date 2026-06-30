@@ -1,11 +1,11 @@
-# 生产配置：密钥通过 ${ENV:-} 注入（docker compose / 根目录 .env）
-# 复制：cp settings_pro.example.yaml settings_pro.yaml
+# 生产模板（进 git）：cp settings_pro.example.yaml settings_pro.yaml
+# 密钥在根目录 .env 注入 OPENAI_API_KEY、DASHSCOPE_API_KEY 等
 
 app:
   secret_key: "${APP_SECRET_KEY:-change-me-in-production}"
   debug: false
   allowed_hosts:
-    - "${APP_ALLOWED_HOST:-38.190.206.248}"
+    - "${APP_ALLOWED_HOST:-your-server-ip-or-domain}"
     - localhost
     - "127.0.0.1"
 

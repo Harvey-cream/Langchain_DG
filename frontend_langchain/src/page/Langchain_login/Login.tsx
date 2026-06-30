@@ -149,7 +149,7 @@ const Login: React.FC = () => {
           // 跳转到聊天页面
           navigate('/home');
         } else {
-          setErrors({ submit: response.message });
+          setErrors({ submit: response.msg || response.message || '登录失败' });
         }
     } catch (error) {
       console.error('登录失败，错误信息:', error);

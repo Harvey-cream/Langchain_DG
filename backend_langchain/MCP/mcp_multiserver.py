@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -72,32 +73,94 @@ async def _async_load_tools(connections: dict[str, dict[str, Any]]) -> list[Any]
     return await client.get_tools()
 
 
-def load_mcp_tools_once() -> list[Any]:
-    """进程内只加载一次；未配置或依赖缺失时返回空列表。"""
+def _store_mcp_tools(tools: list[Any], *, conn_count: int = 0) -> list[Any]:
     global _mcp_tools_cache, _mcp_load_attempted
+    _mcp_tools_cache = tools
+    _mcp_load_attempted = True
+    if tools and conn_count:
+        logger.info(
+            "MCP MultiServer：已从 %d 个服务端加载 %d 个工具",
+            conn_count,
+            len(tools),
+        )
+    return list(tools)
+
+
+def _load_mcp_tools_in_new_loop() -> list[Any]:
+    """在无运行中 event loop 的线程里同步加载（内部使用 asyncio.run）。"""
     with _mcp_lock:
         if _mcp_load_attempted:
             return list(_mcp_tools_cache or [])
-        _mcp_load_attempted = True
         conns = _read_connections()
         if not conns:
-            _mcp_tools_cache = []
-            return []
-        try:
-            _mcp_tools_cache = asyncio.run(_async_load_tools(conns))
-            logger.info(
-                "MCP MultiServer：已从 %d 个服务端加载 %d 个工具",
-                len(conns),
-                len(_mcp_tools_cache),
-            )
-        except ImportError:
-            logger.warning(
-                "MCP：未安装 langchain-mcp-adapters / mcp，或 langchain-core 版本过低；"
-                "请执行 pip install -r requirements.txt"
-            )
-            _mcp_tools_cache = []
-        except Exception:
-            logger.exception("MCP：从服务端拉取工具失败")
-            _mcp_tools_cache = []
-        return list(_mcp_tools_cache or [])
+            return _store_mcp_tools([])
+    try:
+        tools = asyncio.run(_async_load_tools(conns))
+        with _mcp_lock:
+            if _mcp_load_attempted:
+                return list(_mcp_tools_cache or [])
+            return _store_mcp_tools(tools, conn_count=len(conns))
+    except ImportError:
+        logger.warning(
+            "MCP：未安装 langchain-mcp-adapters / mcp，或 langchain-core 版本过低；"
+            "请执行 pip install -r requirements.txt"
+        )
+        with _mcp_lock:
+            if _mcp_load_attempted:
+                return list(_mcp_tools_cache or [])
+            return _store_mcp_tools([])
+    except Exception:
+        logger.exception("MCP：从服务端拉取工具失败")
+        with _mcp_lock:
+            if _mcp_load_attempted:
+                return list(_mcp_tools_cache or [])
+            return _store_mcp_tools([])
+
+
+async def aload_mcp_tools_once() -> list[Any]:
+    """异步加载 MCP 工具（FastAPI lifespan 等 async 上下文应优先调用）。"""
+    with _mcp_lock:
+        if _mcp_load_attempted:
+            return list(_mcp_tools_cache or [])
+        conns = _read_connections()
+        if not conns:
+            return _store_mcp_tools([])
+
+    try:
+        tools = await _async_load_tools(conns)
+        with _mcp_lock:
+            if _mcp_load_attempted:
+                return list(_mcp_tools_cache or [])
+            return _store_mcp_tools(tools, conn_count=len(conns))
+    except ImportError:
+        logger.warning(
+            "MCP：未安装 langchain-mcp-adapters / mcp，或 langchain-core 版本过低；"
+            "请执行 pip install -r requirements.txt"
+        )
+        with _mcp_lock:
+            if _mcp_load_attempted:
+                return list(_mcp_tools_cache or [])
+            return _store_mcp_tools([])
+    except Exception:
+        logger.exception("MCP：从服务端拉取工具失败")
+        with _mcp_lock:
+            if _mcp_load_attempted:
+                return list(_mcp_tools_cache or [])
+            return _store_mcp_tools([])
+
+
+def load_mcp_tools_once() -> list[Any]:
+    """进程内只加载一次；未配置或依赖缺失时返回空列表。"""
+    with _mcp_lock:
+        if _mcp_load_attempted:
+            return list(_mcp_tools_cache or [])
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _load_mcp_tools_in_new_loop()
+
+    # 已在 async 请求里且尚未预加载：放到独立线程跑 asyncio.run，避免嵌套 loop。
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(_load_mcp_tools_in_new_loop).result()
 

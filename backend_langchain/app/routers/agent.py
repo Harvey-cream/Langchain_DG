@@ -21,7 +21,7 @@ from common.extend import (
     polish_agent_conversation_title,
     schedule_async_title_polish,
 )
-from common.stream_sse import (
+from common.stream import (
     iter_sse_chat,
     parse_bool_flag,
     parse_resume_pdf,
@@ -189,7 +189,6 @@ async def chat_stream(
             log_prefix="chat_stream",
             resume_pdf=resume_pdf,
             enable_web_search=enable_web_search,
-            trace_event=trace_event,
         )
     )
 

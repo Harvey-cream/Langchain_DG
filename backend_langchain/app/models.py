@@ -20,9 +20,11 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(150))
     password: Mapped[str] = mapped_column(String(255))
     display_tag: Mapped[str | None] = mapped_column(String(6), unique=True, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now()
+        DateTime, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -34,9 +36,11 @@ class UserConversation(Base):
     title: Mapped[str] = mapped_column(String(255), default="新对话")
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     pinned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now()
+        DateTime, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -50,7 +54,9 @@ class UserSession(Base):
     )
     question: Mapped[str] = mapped_column(Text)
     ai_response: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), server_default=func.now()
+    )
 
 
 class InterviewConversation(Base):
@@ -62,9 +68,11 @@ class InterviewConversation(Base):
     interview_track: Mapped[str] = mapped_column(String(16), default="llm")
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     pinned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now()
+        DateTime, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -78,7 +86,9 @@ class InterviewSession(Base):
     )
     question: Mapped[str] = mapped_column(Text)
     ai_response: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), server_default=func.now()
+    )
 
 
 async def ensure_display_tag(session, user: User) -> str:

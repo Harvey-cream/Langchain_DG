@@ -10,6 +10,7 @@ from typing import Iterable
 from langchain_core.embeddings import Embeddings
 
 from backend_langchain.logger_func import log_info_event
+from config.config import DEFAULT_HF_MODEL
 from common.embedding import get_embedding_model
 
 
@@ -47,7 +48,7 @@ AGENT_SKILLS: tuple[SkillSpec, ...] = (
     ),
     SkillSpec(
         name="knowledge_qa",
-        when="基于项目知识库的知识问答（chroma_db 沉淀主题）",
+        when="基于项目知识库的知识问答（教程/面试沉淀主题）",
         output_schema="问题澄清 -> 命中知识点 -> 答案总结 -> 延伸建议",
         prototypes=(
             "用户在问某个概念是什么、怎么理解、原理是什么。",
@@ -135,7 +136,7 @@ INTERVIEW_SKILLS: tuple[SkillSpec, ...] = (
     ),
 )
 
-_EMBEDDING_MODEL = os.getenv("SKILL_ROUTER_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
+_EMBEDDING_MODEL = os.getenv("SKILL_ROUTER_EMBEDDING_MODEL", DEFAULT_HF_MODEL)
 _ROUTER_MIN_SIM = float(os.getenv("SKILL_ROUTER_MIN_SIM", "0.32"))
 _ROUTER_DEBUG = os.getenv("SKILL_ROUTER_DEBUG", "0").strip() == "1"
 logger = logging.getLogger(__name__)

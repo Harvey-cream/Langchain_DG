@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # 后端：FastAPI + LangChain（构建上下文为仓库根目录）
-FROM python:3.10-slim-bookworm
+# LangGraph get_stream_writer 在 async 节点需 Python >= 3.11
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -23,6 +24,7 @@ RUN set -eux; \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend_langchain/requirements.txt /app/requirements.txt
+# 仅生产运行时依赖；容器内建库另装 requirements-dev.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip setuptools wheel \
     && pip install -r /app/requirements.txt

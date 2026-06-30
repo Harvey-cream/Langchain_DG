@@ -1,22 +1,33 @@
+"""已废弃：请使用 app.settings。保留此模块仅为兼容旧 import。"""
 from __future__ import annotations
 
-import logging
-import os
-from pathlib import Path
+import warnings
 
-import yaml
+from app.settings import (
+    APP_ENV,
+    CONF_DIR,
+    cfg_get,
+    is_production,
+    redis_url,
+    resolve_app_env,
+)
 
-CONF_DIR = Path(__file__).resolve().parent
+__all__ = [
+    "Settings",
+    "RedisArgs",
+    "load_yaml",
+    "settings_conf",
+    "APP_ENV",
+    "is_production",
+]
 
-__all__ = ["Settings", "RedisArgs", "load_yaml", "settings_conf"]
 
-logger = logging.getLogger(__name__)
+def load_yaml(file_path):
+    from pathlib import Path
 
+    from app.settings import _load_yaml
 
-def load_yaml(file_path: str | Path) -> dict:
-    with open(file_path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    return data if isinstance(data, dict) else {}
+    return _load_yaml(Path(file_path))
 
 
 class RedisArgs:
@@ -27,116 +38,53 @@ class RedisArgs:
 
 
 class Settings:
-    """从 env/*.yaml 加载配置；Django settings 中环境变量优先覆盖。"""
+    """兼容壳：委托 app.settings。"""
 
     def __init__(self) -> None:
-        self.env = os.environ.get("DJANGO_ENV", "debug").strip()
-        # 启动时固定打印，避免日志级别为 WARNING 时看不到环境信息。
-        print(f"[env] DJANGO_ENV={self.env}", flush=True)
-        logger.info("当前环境: %s", self.env)
-
-        self._settings_debug = "settings_debug.yaml"
-        self._settings_pro = "settings_pro.yaml"
-        self._settings_test = "settings_test.yaml"
-        self._settings_room_pro = "settings_room_pro.yaml"
-
-        self.config = self._load_config()
-
-        self.mysql_config = self._load_database_config()
-        self.redis_config = self._load_redis_config()
-
-        django_cfg = self.config.get("django") or {}
-        self.yaml_secret_key = django_cfg.get("secret_key")
-        self.yaml_debug = django_cfg.get("debug")
-        _hosts = django_cfg.get("allowed_hosts")
-        if isinstance(_hosts, list):
-            self.yaml_allowed_hosts = [
-                str(h).strip() for h in _hosts if str(h).strip()
-            ]
-        else:
-            self.yaml_allowed_hosts = None
-
-        self.llm_config = (
-            self.config["llm"]
-            if isinstance(self.config.get("llm"), dict)
-            else {}
+        warnings.warn(
+            "env.provider.Settings 已废弃，请直接使用 app.settings",
+            DeprecationWarning,
+            stacklevel=2,
         )
-
-    def _yaml_name_for_env(self) -> str:
-        name = {
-            "debug": self._settings_debug,
-            "dev": self._settings_debug,
-            "local": self._settings_debug,
-            "production": self._settings_pro,
-            "pro": self._settings_pro,
-            "prod": self._settings_pro,
-            "test": self._settings_test,
-            "room_pro": self._settings_room_pro,
-        }.get(self.env.lower(), self._settings_debug)
-        return name
-
-    def _load_config(self) -> dict:
-        name = self._yaml_name_for_env()
-        file_path = CONF_DIR / name
-        if not file_path.is_file():
-            if name in (self._settings_test, self._settings_room_pro):
-                fallback = CONF_DIR / self._settings_debug
-                if fallback.is_file():
-                    logger.warning("缺少配置文件 %s，回退使用 %s", file_path, fallback)
-                    file_path = fallback
-        if not file_path.is_file():
-            raise FileNotFoundError(f"没有可用的配置文件: {CONF_DIR / name}")
-        return load_yaml(file_path)
-
-    def _load_database_config(self):
-        ret = self.config.get("mysql") or self.config.get("database")
-        if ret is None:
-            return {}
-        return ret
-
-    def _load_redis_config(self):
-        ret = self.config.get("redis")
-        if not ret:
-            return None
-        conf = RedisArgs()
-        conf.host = ret.get("host")
-        conf.port = ret.get("port")
-        conf.db = ret.get("db")
-        conf.password = ret.get("password")
-        return conf
+        self.env = APP_ENV
+        self.config = _get_config_snapshot()
+        self.mysql_config = self.config.get("mysql") or self.config.get("database") or {}
+        redis_cfg = self.config.get("redis")
+        self.redis_config = None
+        if isinstance(redis_cfg, dict) and redis_cfg:
+            conf = RedisArgs()
+            conf.host = redis_cfg.get("host")
+            conf.port = redis_cfg.get("port")
+            conf.db = redis_cfg.get("db")
+            conf.password = redis_cfg.get("password")
+            self.redis_config = conf
+        app_cfg = self.config.get("app") or self.config.get("django") or {}
+        self.yaml_secret_key = app_cfg.get("secret_key")
+        self.yaml_debug = app_cfg.get("debug")
+        hosts = app_cfg.get("allowed_hosts")
+        self.yaml_allowed_hosts = (
+            [str(h).strip() for h in hosts if str(h).strip()]
+            if isinstance(hosts, list)
+            else None
+        )
+        self.llm_config = self.config.get("llm") if isinstance(self.config.get("llm"), dict) else {}
 
     @property
     def redis_url(self) -> str:
-        conf = self.redis_config
-        if not conf or conf.host is None:
-            return os.environ.get("CELERY_BROKER_URL", "redis://lanchain_redis:6379/0")
-        auth = f":{conf.password}@" if conf.password else ""
-        port = conf.port if conf.port is not None else 6379
-        db = conf.db if conf.db is not None else 0
-        return f"redis://{auth}{conf.host}:{port}/{db}"
+        return redis_url()
 
     def cfg_get(self, path: str, default=None):
-        """点号路径，如 django.secret_key、mysql.host。"""
-        cur: object = self.config
-        if not path:
-            return default
-        for part in path.split("."):
-            if not isinstance(cur, dict) or part not in cur:
-                return default
-            cur = cur[part]
-        return cur if cur is not None else default
+        return cfg_get(path, default)
 
     def apply_llm_env(self) -> None:
-        """将 yaml 中 llm 段写入 os.environ（不覆盖已有变量）。"""
-        mapping = {
-            "agent_base_url": "LLM_AGENT_BASE_URL",
-            "agent_api_key": "LLM_AGENT_API_KEY",
-            "agent_model": "LLM_AGENT_MODEL",
-        }
-        for yk, ek in mapping.items():
-            yv = self.llm_config.get(yk)
-            if yv is not None and str(yv).strip() != "":
-                os.environ.setdefault(ek, str(yv))
+        """已废弃：配置由 settings_*.yaml + ${ENV} 直接加载。"""
+        warnings.warn("apply_llm_env 已废弃", DeprecationWarning, stacklevel=2)
+
+
+def _get_config_snapshot() -> dict:
+    from app.settings import get_config
+
+    return get_config()
 
 
 _SETTINGS: Settings | None = None
@@ -147,8 +95,3 @@ def settings_conf() -> Settings:
     if _SETTINGS is None:
         _SETTINGS = Settings()
     return _SETTINGS
-
-
-if __name__ == "__main__":
-    sp = settings_conf()
-    print(sp.mysql_config)

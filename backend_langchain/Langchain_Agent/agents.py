@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -13,12 +12,19 @@ from langgraph.graph.state import CompiledStateGraph
 
 from common.agent import build_agent_graph, stream_graph_chat_model_events
 from Langchain_Agent.prompts import AGENT_SYSTEM_PREFIX, INTERVIEW_SYSTEM_PREFIX
-from Langchain_Agent.tools import get_all_agent_tools
-from Langchain_Agent.tools.interview_rag import INTERVIEW_RAG_TOOLS
+from Langchain_Agent.tools.knowledge import get_all_agent_tools, get_interview_tools
 
 _main_local: CompiledStateGraph | None = None
 _main_web: CompiledStateGraph | None = None
 _interview: CompiledStateGraph | None = None
+
+
+def reset_stream_agent_cache() -> None:
+    """代码热重载后清图缓存，避免仍用旧节点/工具编译结果。"""
+    global _main_local, _main_web, _interview
+    _main_local = None
+    _main_web = None
+    _interview = None
 
 
 def get_stream_agent_executor(
@@ -52,7 +58,7 @@ def get_stream_interview_executor(*, temperature: float = 0.45) -> CompiledState
     global _interview
     if _interview is None:
         _interview = build_agent_graph(
-            tools=INTERVIEW_RAG_TOOLS,
+            tools=get_interview_tools(),
             system_prompt=INTERVIEW_SYSTEM_PREFIX,
             temperature=temperature,
             streaming=True,
@@ -67,7 +73,6 @@ async def stream_agent(
     temperature: float = 0.45,
     resume_pdf: bool | None = None,
     enable_web_search: bool = False,
-    cancel_event: asyncio.Event | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     agent = get_stream_agent_executor(temperature=temperature, enable_web_search=enable_web_search)
     async for evt in stream_graph_chat_model_events(
@@ -75,7 +80,6 @@ async def stream_agent(
         prompt_text=prompt_text,
         thread_id=thread_id,
         resume_pdf=resume_pdf,
-        cancel_event=cancel_event,
     ):
         yield evt
 
@@ -86,7 +90,6 @@ async def stream_interview_agent(
     thread_id: str,
     temperature: float = 0.45,
     resume_pdf: bool | None = None,
-    cancel_event: asyncio.Event | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     agent = get_stream_interview_executor(temperature=temperature)
     async for evt in stream_graph_chat_model_events(
@@ -94,6 +97,5 @@ async def stream_interview_agent(
         prompt_text=prompt_text,
         thread_id=thread_id,
         resume_pdf=resume_pdf,
-        cancel_event=cancel_event,
     ):
         yield evt

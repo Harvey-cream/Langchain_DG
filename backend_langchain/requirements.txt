@@ -1,21 +1,16 @@
-# 生产 / Docker：向量走 DashScope API，不装 torch、sentence-transformers。
-# 本地要用 HuggingFace 嵌入：再装 requirements-dev.txt（并自行安装 CPU 版 torch，见该文件说明）。
-cffi==2.0.0
-cryptography==46.0.6
+# 生产 / Docker 运行时依赖（向量走 DashScope OpenAI 兼容 API，不装 torch）。
+# 建库 / 评测脚本：pip install -r requirements-dev.txt
+# 体积大头：chromadb（会拉 onnxruntime、kubernetes 等），RAG 必需。
+# 验证：APP_ENV=production python Scripts/verify_prod_imports.py
+
 fastapi>=0.115.0,<1.0
-uvicorn[standard]>=0.32.0,<1.0
+uvicorn>=0.32.0,<1.0
 gmssl==3.2.2
-PyJWT==2.9.0
+PyJWT[crypto]==2.9.0
 asyncmy>=0.2.9,<1.0
 sqlalchemy[asyncio]>=2.0.36,<3.0
-pycparser==3.0
 pycryptodomex==3.23.0
-typing_extensions==4.15.0
-tzdata==2025.3
-# LangChain 1.x / LangGraph：手写 StateGraph（不再用 langchain.agents.create_agent）
-# community 仅 Scripts 建库用（HuggingFaceEmbeddings / PyPDFLoader）；text-splitters 供切分
-langchain-community>=0.4.1,<0.5
-langchain-text-splitters>=1.1.1,<2.0
+
 langchain-core>=1.2.10,<2.0
 langchain-openai>=1.1.12,<2.0
 langgraph>=1.1.5,<1.2
@@ -24,11 +19,10 @@ langchain-mcp-adapters>=0.2.2,<0.3
 mcp>=1.9.2,<2
 langchain-chroma>=1.0.0,<2.0
 chromadb>=1.3.5,<2.0
-numpy>=1.26.0,<3.0
+
 python-dotenv
 PyYAML>=6.0.1,<7.0
-dashscope>=1.19.0
-aiosqlite>=0.20.0,<1.0
+# 0.22+ 移除 Connection.is_alive，与 langgraph-checkpoint-sqlite 2.x 不兼容
+aiosqlite>=0.20.0,<0.22.0
 markdown>=3.5,<4.0
 xhtml2pdf>=0.2.16,<0.3
-python-multipart>=0.0.9,<1.0

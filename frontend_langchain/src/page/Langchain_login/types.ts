@@ -14,20 +14,24 @@ export interface LoginRequest {
 // 登录响应
 export interface LoginResponse {
   token?: string;
-  message: string;
+  msg?: string;
+  message?: string;
   success: boolean;
+  data?: { token?: string };
 }
 
 // 注册响应
 export interface RegisterResponse {
-  message: string;
+  msg?: string;
+  message?: string;
   success: boolean;
 }
 
 // API响应通用结构
 export interface ApiResponse<T> {
   data?: T;
-  message: string;
+  msg?: string;
+  message?: string;
   success: boolean;
 }
 

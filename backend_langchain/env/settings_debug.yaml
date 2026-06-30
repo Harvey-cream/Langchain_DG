@@ -1,8 +1,8 @@
-# 本地 / 开发：DJANGO_ENV=debug（默认）
-# MySQL 在宿主机或本机 Docker 时：host 用 localhost；若 Django 在容器、DB 在宿主机，可改为 host.docker.internal（Windows/Mac Docker Desktop）
+# 本地开发：APP_ENV=debug（默认）
+# 复制：cp settings_debug.example.yaml settings_debug.yaml
 
-django:
-  secret_key: "django-insecure-$fnhz32w$lylbzr0s7hts%zvru#ei#8!)097f5m*l+#*(z9qh0"
+app:
+  secret_key: "${APP_SECRET_KEY:-django-insecure-local-dev-only}"
   debug: true
   allowed_hosts:
     - localhost
@@ -10,14 +10,35 @@ django:
     - "[::1]"
 
 mysql:
-  host: localhost
+  host: "${MYSQL_HOST:-localhost}"
   port: 3306
-  database: langchain
+  database: "${MYSQL_DATABASE:-langchain}"
   user: root
-  password: root
+  password: "${MYSQL_PASSWORD:-root}"
+
+redis:
+  host: "${REDIS_HOST:-localhost}"
+  port: 6379
+  db: 0
 
 llm:
-  # 可选；也可仅用环境变量 LLM_AGENT_*（优先级：环境变量 > 本文件）
-  agent_base_url: ""
-  agent_api_key: ""
-  agent_model: ""
+  base_url: "${OPENAI_BASE_URL:-https://gpt-agent.cc/v1}"
+  api_key: "${OPENAI_API_KEY:-}"
+  model: "${OPENAI_MODEL:-gpt-5.4}"
+
+dashscope:
+  api_key: "${DASHSCOPE_API_KEY:-}"
+  embedding_model: "${DASHSCOPE_EMBEDDING_MODEL:-text-embedding-v3}"
+  embedding_dimensions: 1024
+  embedding_base_url: "${DASHSCOPE_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+  embedding_batch_size: 10
+
+rag:
+  collection: knowledge
+  top_k: 8
+  docs_agent: docs1
+  docs_interview: docs2
+  chunk_size: 600
+  chunk_overlap: 80
+  hf_embedding_model: BAAI/bge-large-zh-v1.5
+  hf_embedding_batch_size: 32

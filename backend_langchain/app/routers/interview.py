@@ -19,7 +19,7 @@ from common.extend import (
     polish_interview_title,
     schedule_async_title_polish,
 )
-from common.stream_sse import (
+from common.stream import (
     iter_sse_chat,
     parse_resume_pdf,
     session_message_rows,

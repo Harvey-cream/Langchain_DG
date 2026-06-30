@@ -190,7 +190,7 @@ const Register: React.FC = () => {
           navigate('/login');
         }, 3000);
       } else {
-        setErrors({ submit: response.message });
+        setErrors({ submit: response.msg || response.message || '注册失败' });
       }
     } catch (error) {
       console.error('注册失败，错误信息:', error);

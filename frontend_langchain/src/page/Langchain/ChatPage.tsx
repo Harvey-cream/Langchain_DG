@@ -62,6 +62,7 @@ type ChatViewProps = {
   onPdfExportConfirm: () => void;
   onPdfExportCancel: () => void;
   inputLocked: boolean;
+  loadingStatusText?: string | null;
 };
 
 /** 网络层 delta 合并：防重复片段、累计全文、后缀重叠去重 */
@@ -204,6 +205,7 @@ const ChatView: React.FC<ChatViewProps> = ({
   onPdfExportConfirm,
   onPdfExportCancel,
   inputLocked,
+  loadingStatusText,
 }) => {
   return (
     <div className="chat-layout">
@@ -325,6 +327,9 @@ const ChatView: React.FC<ChatViewProps> = ({
           {isLoading && (
             <div className="message ai-message">
               <div className="message-content">
+                {loadingStatusText ? (
+                  <span className="chat-stream-progress-text">{loadingStatusText}</span>
+                ) : null}
                 <div className="loading-indicator">
                   <span className="loading-dot"></span>
                   <span className="loading-dot"></span>
@@ -384,6 +389,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
   const [loadingConversationId, setLoadingConversationId] = useState<number | undefined>(undefined);
   const [conversationId, setConversationId] = useState<number | undefined>(undefined);
   const [enableWebSearch, setEnableWebSearch] = useState(false);
+  const [loadingStatusText, setLoadingStatusText] = useState<string | null>(null);
   const [pdfExportPrompt, setPdfExportPrompt] = useState<{ kind: string; message: string } | null>(null);
   const [pdfExportHostMessageId, setPdfExportHostMessageId] = useState<string | null>(null);
   const [userDisplayTag, setUserDisplayTag] = useState<string | null>(null);
@@ -814,6 +820,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     },
     onDelta: (text: string) => {
       if (!isCurrentStreamConversation()) return;
+      setLoadingStatusText(null);
       if (!streamingMsgIdRef.current) {
         const id = `ai-${Date.now()}`;
         streamingMsgIdRef.current = id;
@@ -872,6 +879,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       if (isCurrentStreamConversation()) {
         void loadConversations();
       }
+    },
+    onStatus: (text: string) => {
+      if (!isCurrentStreamConversation()) return;
+      setLoadingStatusText(text);
     },
     onInterrupt: (p: { kind: string; message: string }) => {
       sawInterruptRef.current = true;
@@ -933,6 +944,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     }
     streamAbortRef.current = null;
     setIsLoading(false);
+    setLoadingStatusText(null);
     setLoadingConversationId(undefined);
 
     if (pendingStreamEndRef.current) {
@@ -1262,6 +1274,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
         onPdfExportConfirm={() => void handlePdfResume(true)}
         onPdfExportCancel={() => void handlePdfResume(false)}
         inputLocked={streamActive || !!pdfExportPrompt}
+        loadingStatusText={loadingStatusText}
       />
     </div>
   );
