@@ -108,39 +108,6 @@ frontend_langchain/        # React frontend
 │   └── services/       # API services
 ```
 
-## API Endpoints
-
-### User Authentication
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/register/` | User registration |
-| POST | `/login/` | User login |
-| GET | `/info/` | Get user information |
-| PUT | `/info/update/` | Update user information |
-
-### Agent Conversation
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/agent/chat/` | Get conversation list/messages |
-| POST | `/api/agent/chat/stream/` | Streaming conversation |
-| PATCH | `/api/agent/conversation/` | Update conversation |
-| DELETE | `/api/agent/conversation/` | Delete conversation |
-
-### Interview Assistant
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/interview/chat/` | Get interview conversation |
-| POST | `/api/interview/chat/stream/` | Streaming interview conversation |
-
-### Health Check
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Service health status |
-
 ## Build Knowledge Base
 
 ### Option 1: Build inside Container
