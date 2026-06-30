@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Button, Card, Form, Input, Typography, Alert, Spin } from 'antd';
 import { login } from '../../services/api';
 import { LoginRequest, FormErrors } from './types';
 import { SM2Utils } from '../../utils/sm2';
 
-const { Title, Text } = Typography;
+const { Title } = Typography;
 
 type LoginViewProps = {
   formData: LoginRequest;
@@ -19,6 +19,13 @@ const LoginView: React.FC<LoginViewProps> = ({ formData, errors, loading, onChan
   return (
     <Card className="auth-card" variant="outlined">
       <Title level={2} className="auth-title">用户登录</Title>
+
+      <div className="auth-demo-hint">
+        <div className="auth-demo-hint__title">面试官您好 👋</div>
+        <p className="auth-demo-hint__desc">
+          演示账号已预填，直接点击「登录」即可体验智能体与面试助手。
+        </p>
+      </div>
 
       {errors.submit && (
         <Alert
@@ -56,10 +63,6 @@ const LoginView: React.FC<LoginViewProps> = ({ formData, errors, loading, onChan
           {loading ? <Spin size="small" /> : '登录'}
         </Button>
       </Form>
-
-      <Text className="auth-link-text">
-        没有账号？ <Link to="/register">去注册</Link>
-      </Text>
     </Card>
   );
 };
@@ -69,8 +72,8 @@ const Login: React.FC = () => {
 
   // 表单状态
   const [formData, setFormData] = useState<LoginRequest>({
-    email: '',
-    password: '',
+    email: '15573701909@163.com',
+    password: '123456',
   });
 
   // 错误信息
