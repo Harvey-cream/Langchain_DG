@@ -108,39 +108,6 @@ frontend_langchain/        # React 前端
 │   └── services/       # API 服务
 ```
 
-## API 接口
-
-### 用户认证
-
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| POST | `/register/` | 用户注册 |
-| POST | `/login/` | 用户登录 |
-| GET | `/info/` | 获取用户信息 |
-| PUT | `/info/update/` | 更新用户信息 |
-
-### Agent 对话
-
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| GET | `/api/agent/chat/` | 获取对话列表/消息 |
-| POST | `/api/agent/chat/stream/` | 流式对话 |
-| PATCH | `/api/agent/conversation/` | 更新对话 |
-| DELETE | `/api/agent/conversation/` | 删除对话 |
-
-### 面试助手
-
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| GET | `/api/interview/chat/` | 获取面试对话 |
-| POST | `/api/interview/chat/stream/` | 流式面试对话 |
-
-### 健康检查
-
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| GET | `/health` | 服务健康状态 |
-
 ## 构建知识库
 
 ### 方式一：容器内构建
