@@ -13,10 +13,14 @@ chroma/                  → DashScope text-embedding-v3（1024 维），git 忽
 
 ## 服务器构建向量库
 
+`.env` 中配置好 `DASHSCOPE_API_KEY` 后，在仓库根目录：
+
 ```bash
+# 方式 1：容器内建库（backend 未运行或已 docker compose down）
+docker compose run --rm backend python Scripts/build_rag_knowledge.py
+
+# 方式 2：宿主机（backend_langchain 目录，已 pip install -r requirements.txt）
 cd backend_langchain
-pip install -r requirements-dev.txt
-export DASHSCOPE_API_KEY=sk-...
 python Scripts/build_rag_knowledge.py
 ```
 

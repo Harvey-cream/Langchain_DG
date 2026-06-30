@@ -24,7 +24,7 @@ RUN set -eux; \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend_langchain/requirements.txt /app/requirements.txt
-# 仅生产运行时依赖；容器内建库另装 requirements-dev.txt
+# 统一 requirements.txt（含建库依赖）；容器内可直接 python Scripts/build_rag_knowledge.py
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip setuptools wheel \
     && pip install -r /app/requirements.txt

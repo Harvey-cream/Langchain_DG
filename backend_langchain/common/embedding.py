@@ -84,7 +84,7 @@ def get_embedding_model(
 ) -> Embeddings:
     """
     嵌入单例：已配置 DASHSCOPE_API_KEY 时（含本地 debug）走 DashScope；
-    否则 debug 回退 HuggingFace 本地（需 requirements-dev.txt）。
+    否则 debug 回退 HuggingFace 本地（另装 torch CPU 版）。
     """
     if is_production or dashscope_api_key():
         return get_dashscope_embedding_model()

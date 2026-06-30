@@ -1,7 +1,7 @@
-# 生产 / Docker 运行时依赖（向量走 DashScope OpenAI 兼容 API，不装 torch）。
-# 建库 / 评测脚本：pip install -r requirements-dev.txt
+# 生产 / Docker / 建库统一依赖（向量走 DashScope，不装 torch）。
 # 体积大头：chromadb（会拉 onnxruntime、kubernetes 等），RAG 必需。
 # 验证：APP_ENV=production python Scripts/verify_prod_imports.py
+# 本地 HuggingFace 嵌入（无 DASHSCOPE_API_KEY 时）另装 CPU 版 torch。
 
 fastapi>=0.115.0,<1.0
 uvicorn>=0.32.0,<1.0
@@ -13,6 +13,8 @@ pycryptodomex==3.23.0
 
 langchain-core>=1.2.10,<2.0
 langchain-openai>=1.1.12,<2.0
+langchain-community>=0.4.1,<0.5
+langchain-text-splitters>=1.1.1,<2.0
 langgraph>=1.1.5,<1.2
 langgraph-checkpoint-sqlite>=2.0.10,<3.0
 langchain-mcp-adapters>=0.2.2,<0.3
