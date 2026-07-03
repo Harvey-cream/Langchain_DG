@@ -5,7 +5,8 @@ import os
 import threading
 import logging
 from dataclasses import dataclass
-from typing import Iterable
+from collections.abc import Callable
+from typing import Iterable, Literal
 
 from langchain_core.embeddings import Embeddings
 
@@ -287,8 +288,38 @@ def _render_skill_context(spec: SkillSpec | None) -> str:
         f"- 当前激活：{spec.name}\n"
         f"- 适用场景：{spec.when}\n"
         f"- 输出结构：{spec.output_schema}\n"
-        "- 要求：先按该结构组织，再结合工具检索结果给出可执行回答。"
+        "- 要求：先按该结构组织，再结合下方检索参考给出可执行回答。"
     )
+
+
+RecallMode = Literal["main", "interview"]
+_MAIN_RECALL_SKILLS = frozenset({"knowledge_qa"})
+
+
+def prepare_turn_context(
+    user_input: str,
+    *,
+    mode: RecallMode,
+    on_search: Callable[[], None] | None = None,
+) -> tuple[SkillSpec | None, str, str]:
+    """Skill 路由 + 按需 RAG 召回（Workflow 节点入口）。"""
+    text = (user_input or "").strip()
+    skills = AGENT_SKILLS if mode == "main" else INTERVIEW_SKILLS
+    spec = _pick_skill(text, skills) if text else None
+    skill_context = _render_skill_context(spec)
+    retrieved = ""
+    should_recall = bool(text) and (
+        mode == "interview" or (spec is not None and spec.name in _MAIN_RECALL_SKILLS)
+    )
+    if should_recall:
+        if on_search:
+            on_search()
+        from common.rag import search
+        from config.config import CORPUS_AGENT, CORPUS_INTERVIEW
+
+        corpus = CORPUS_INTERVIEW if mode == "interview" else CORPUS_AGENT
+        retrieved = search(text, corpus=corpus)
+    return spec, skill_context, retrieved
 
 
 def build_agent_skill_context(user_input: str) -> str:

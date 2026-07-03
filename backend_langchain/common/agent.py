@@ -1,7 +1,7 @@
-"""LangGraph Agent 核心：手写两节点图（方案 B）、checkpoint、异步流式事件解析。
+"""LangGraph Agent 核心：Workflow（skill_recall）+ Agent（model ↔ tools）、checkpoint、流式事件。
 
-构图刻意保持显式：agent_node 调模型、ToolNode 跑工具、tools_condition 决定是否再循环。
-两个 Agent（主对话 / 面试）共用本文件的 `build_agent_graph`，仅传入不同的 tools 与 system_prompt。
+START → skill_recall（Skill 路由 + 按需 RAG）→ agent → tools → agent …
+两个 Agent 共用 `build_agent_graph`，差异在 tools、system_prompt、recall_mode。
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import os
 import sys
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.config import get_stream_writer
@@ -32,7 +32,10 @@ if __package__ in {None, ""}:
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
+from common.skill_router import prepare_turn_context
 from config.config import get_qwen_chat_model
+
+RecallModeParam = Literal["main", "interview"]
 
 logger = logging.getLogger(__name__)
 
@@ -112,31 +115,70 @@ def _graph_config(thread_id: str) -> dict[str, Any]:
 
 
 # =============================================================================
-# 方案 B：手写两节点图（agent ↔ tools），主/面试各编译一张
+# Workflow + Agent 图：skill_recall → agent ↔ tools
 # =============================================================================
 
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
+    skill_name: str
+    skill_context: str
+    retrieved_context: str
+
+
+def _latest_user_text(messages: list[BaseMessage]) -> str:
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            return message_content_to_text(msg.content).strip()
+    return ""
 
 
 def build_agent_graph(
     *,
     tools: Sequence[Any],
     system_prompt: str,
+    recall_mode: RecallModeParam,
     temperature: float = 0.45,
     streaming: bool = False,
 ) -> CompiledStateGraph:
-    """编译一张 LangGraph 图：system_prompt 每轮注入，工具由 ToolNode 执行（含 PDF interrupt）。"""
+    """编译 LangGraph：START 后固定 skill_recall，再 agent ↔ tools（MCP/PDF）。"""
     tools_list = list(tools)
     model = get_qwen_chat_model(temperature=temperature, streaming=streaming)
     if tools_list:
         model = model.bind_tools(tools_list)
     system_message = SystemMessage(content=system_prompt)
 
+    async def skill_recall_node(state: AgentState) -> dict[str, str]:
+        user_text = _latest_user_text(state["messages"])
+        if not user_text:
+            return {"skill_name": "", "skill_context": "", "retrieved_context": ""}
+
+        writer = get_stream_writer()
+
+        def _on_search() -> None:
+            writer({"type": "status", "text": "正在搜索..."})
+
+        spec, skill_context, retrieved = prepare_turn_context(
+            user_text,
+            mode=recall_mode,  # type: ignore[arg-type]
+            on_search=_on_search,
+        )
+        return {
+            "skill_name": spec.name if spec else "",
+            "skill_context": skill_context,
+            "retrieved_context": retrieved,
+        }
+
     async def agent_node(state: AgentState) -> dict[str, list[BaseMessage]]:
+        prefix: list[BaseMessage] = [system_message]
+        if sc := (state.get("skill_context") or "").strip():
+            prefix.append(SystemMessage(content=sc))
+        if rc := (state.get("retrieved_context") or "").strip():
+            prefix.append(
+                SystemMessage(content=f"【检索参考（内部，勿照抄原文）】\n{rc}")
+            )
         gathered: BaseMessage | None = None
-        async for chunk in model.astream([system_message, *state["messages"]]):
+        async for chunk in model.astream(prefix + state["messages"]):
             if text := message_content_to_text(getattr(chunk, "content", None)):
                 get_stream_writer()({"type": "delta", "text": text})
             gathered = chunk if gathered is None else gathered + chunk  # type: ignore[operator]
@@ -145,9 +187,11 @@ def build_agent_graph(
         return {"messages": [gathered]}
 
     builder = StateGraph(AgentState)
+    builder.add_node("skill_recall", skill_recall_node)
     builder.add_node("agent", agent_node)
     builder.add_node("tools", ToolNode(tools_list))
-    builder.add_edge(START, "agent")
+    builder.add_edge(START, "skill_recall")
+    builder.add_edge("skill_recall", "agent")
     builder.add_conditional_edges("agent", tools_condition, {"tools": "tools", END: END})
     builder.add_edge("tools", "agent")
     return builder.compile(checkpointer=get_checkpointer())
@@ -165,27 +209,6 @@ async def _compress_history_safely(agent: CompiledStateGraph, thread_id: str) ->
         log_warning_event(logger, "memory_compress_skipped", thread_id=thread_id, error=str(e))
 
 
-_SEARCH_TOOLS = frozenset({"search_knowledge", "search_interview_bank"})
-
-
-def _search_status_from_updates(payload: Any) -> str | None:
-    """agent 决定调检索工具时，在 updates 层推通用状态（工具内不调 get_stream_writer）。"""
-    if not isinstance(payload, dict):
-        return None
-    agent = payload.get("agent")
-    if not isinstance(agent, dict):
-        return None
-    msgs = agent.get("messages") or []
-    if not msgs:
-        return None
-    last = msgs[-1]
-    for tc in getattr(last, "tool_calls", None) or []:
-        name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
-        if name in _SEARCH_TOOLS:
-            return "正在搜索..."
-    return None
-
-
 async def stream_graph_chat_model_events(
     agent: CompiledStateGraph,
     *,
@@ -198,7 +221,12 @@ async def stream_graph_chat_model_events(
         graph_input: Any = Command(resume=resume_pdf)
     else:
         await _compress_history_safely(agent, thread_id)
-        graph_input = {"messages": [HumanMessage(content=prompt_text)]}
+        graph_input = {
+            "messages": [HumanMessage(content=prompt_text)],
+            "skill_name": "",
+            "skill_context": "",
+            "retrieved_context": "",
+        }
 
     seen_pdf: set[tuple[str, str]] = set()
 
@@ -218,8 +246,6 @@ async def stream_graph_chat_model_events(
             continue
 
         if mode == "updates":
-            if isinstance(payload, dict) and (status := _search_status_from_updates(payload)):
-                yield {"type": "status", "text": status}
             intr = interrupt_payload_from_updates(payload)
             if intr:
                 yield {"type": "interrupt", **intr}

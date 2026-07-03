@@ -1,4 +1,4 @@
-"""知识检索工具：单入口 + metadata 域过滤。"""
+"""MCP 工具装配与向量库预热（RAG 召回已移至 LangGraph skill_recall Workflow 节点）。"""
 from __future__ import annotations
 
 import asyncio
@@ -6,24 +6,10 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from langchain_core.tools import tool
-
 from backend_langchain.logger_func import log_exception_event
-from config.config import CORPUS_AGENT, CORPUS_INTERVIEW
-from common.rag import search, warmup
+from common.rag import warmup
 
 logger = logging.getLogger(__name__)
-
-@tool("search_knowledge")
-def search_knowledge(query: str, domain: str | None = None) -> str:
-    """检索主助手知识库。domain 为 docs1 下子目录名（如 ai_programming）；不传则搜全库。"""
-    return search(query, corpus=CORPUS_AGENT, domain=domain)
-
-
-@tool("search_interview_bank")
-def search_interview_bank(query: str, domain: str | None = None) -> str:
-    """检索面试题库。domain 为 docs2 下子目录名（如 interview_llm）；不传则搜全库。"""
-    return search(query, corpus=CORPUS_INTERVIEW, domain=domain)
 
 
 def warmup_knowledge_stores() -> None:
@@ -80,10 +66,10 @@ def get_all_agent_tools(*, enable_web_search: bool = False) -> list:
     mcp_tools = [_mcp_tool_with_sync_invoke(t) for t in load_mcp_tools_once()]
     if not enable_web_search:
         mcp_tools = [t for t in mcp_tools if not _is_tavily_tool(t)]
-    return [search_knowledge, confirm_pdf_export, finalize_pdf_export] + mcp_tools
+    return [confirm_pdf_export, finalize_pdf_export] + mcp_tools
 
 
 def get_interview_tools() -> list:
     from human_in_the_loop.human_loop import confirm_pdf_export, finalize_pdf_export
 
-    return [search_interview_bank, confirm_pdf_export, finalize_pdf_export]
+    return [confirm_pdf_export, finalize_pdf_export]

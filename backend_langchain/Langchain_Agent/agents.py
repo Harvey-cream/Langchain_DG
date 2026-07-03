@@ -1,7 +1,6 @@
-"""方案 B：两个独立 LangGraph 图（超级智能体 + 面试大师），共用 build_agent_graph。
+"""两个独立 LangGraph 图（超级智能体 + 面试大师），共用 build_agent_graph。
 
-差异只有两处：工具集 与 system_prompt。其余构图、流式、checkpoint 完全一致。
-图按需懒加载并缓存；主对话因联网开关需要不同工具集，故缓存本地 / 联网两张。
+差异：tools、system_prompt、recall_mode。图结构：skill_recall → agent ↔ tools。
 """
 from __future__ import annotations
 
@@ -32,13 +31,14 @@ def get_stream_agent_executor(
     temperature: float = 0.45,
     enable_web_search: bool = False,
 ) -> CompiledStateGraph:
-    """超级智能体图：RAG + PDF + MCP 工具（enable_web_search 决定是否含联网搜索）。"""
+    """超级智能体图：Workflow RAG + MCP + PDF（enable_web_search 决定是否含联网搜索）。"""
     global _main_local, _main_web
     if enable_web_search:
         if _main_web is None:
             _main_web = build_agent_graph(
                 tools=get_all_agent_tools(enable_web_search=True),
                 system_prompt=AGENT_SYSTEM_PREFIX,
+                recall_mode="main",
                 temperature=temperature,
                 streaming=True,
             )
@@ -47,6 +47,7 @@ def get_stream_agent_executor(
         _main_local = build_agent_graph(
             tools=get_all_agent_tools(enable_web_search=False),
             system_prompt=AGENT_SYSTEM_PREFIX,
+            recall_mode="main",
             temperature=temperature,
             streaming=True,
         )
@@ -54,12 +55,13 @@ def get_stream_agent_executor(
 
 
 def get_stream_interview_executor(*, temperature: float = 0.45) -> CompiledStateGraph:
-    """面试大师图：仅面试题库 RAG + PDF 工具，不挂 MCP。"""
+    """面试大师图：Workflow RAG + PDF，不挂 MCP。"""
     global _interview
     if _interview is None:
         _interview = build_agent_graph(
             tools=get_interview_tools(),
             system_prompt=INTERVIEW_SYSTEM_PREFIX,
+            recall_mode="interview",
             temperature=temperature,
             streaming=True,
         )

@@ -17,9 +17,7 @@ from app.utils import format_datetime
 from backend_langchain.logger_func import log_exception_event
 from common.agent import message_content_to_text
 from common.extend import quick_agent_greeting_prompt, quick_interview_greeting_prompt
-from common.skill_router import build_agent_skill_context, build_interview_skill_context
 from config.config import get_qwen_chat_model
-from Langchain_Agent.prompts import wrap_user_message
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +25,6 @@ AgentKind = Literal["main", "interview"]
 _MAX_ERR_LEN = 8000
 _INTERRUPT_HINT = "（请在界面点击按钮确认或取消 PDF 导出。）"
 
-_SKILL = {"main": build_agent_skill_context, "interview": build_interview_skill_context}
 _QUICK = {"main": quick_agent_greeting_prompt, "interview": quick_interview_greeting_prompt}
 
 
@@ -82,12 +79,11 @@ async def stream_chat_events(
                 yield {"type": "delta", "text": text}
         return
 
-    prompt = wrap_user_message(user_input, skill_context=_SKILL[kind](user_input))
     for attempt in range(2):
         tid = thread_id if attempt == 0 else f"{thread_id}:recover:{int(time.time() * 1000)}"
         try:
             async for evt in fn(
-                prompt_text=prompt,
+                prompt_text=user_input.strip(),
                 thread_id=tid,
                 temperature=temperature,
                 **extra,
