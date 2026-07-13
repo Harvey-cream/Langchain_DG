@@ -145,6 +145,7 @@ def dashscope_config() -> dict[str, Any]:
     return {
         "api_key": str(ds.get("api_key") or "").strip(),
         "embedding_model": str(ds.get("embedding_model") or "text-embedding-v3").strip(),
+        "rerank_model": str(ds.get("rerank_model") or "qwen3-rerank").strip() or "qwen3-rerank",
         "embedding_dimensions": dim_int,
         "embedding_base_url": str(
             ds.get("embedding_base_url") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -155,9 +156,17 @@ def dashscope_config() -> dict[str, Any]:
 
 def rag_config() -> dict[str, Any]:
     rag = _section("rag")
+    rewrite_enabled = rag.get("query_rewrite_enabled")
+    if rewrite_enabled is None:
+        rewrite_enabled = True
     return {
         "collection": str(rag.get("collection") or "knowledge").strip() or "knowledge",
-        "top_k": int(rag.get("top_k") or 8),
+        "recall_k": int(rag.get("recall_k") or 40),
+        "rerank_top_k": int(rag.get("rerank_top_k") or 5),
+        "max_distance": float(rag.get("max_distance") if rag.get("max_distance") is not None else 0.65),
+        "query_rewrite_enabled": bool(rewrite_enabled),
+        "query_rewrite_max_questions": int(rag.get("query_rewrite_max_questions") or 4),
+        "query_rewrite_context_turns": int(rag.get("query_rewrite_context_turns") or 2),
         "docs_agent": str(rag.get("docs_agent") or "docs1").strip() or "docs1",
         "docs_interview": str(rag.get("docs_interview") or "docs2").strip() or "docs2",
         "chunk_size": int(rag.get("chunk_size") or 600),

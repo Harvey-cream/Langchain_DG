@@ -293,32 +293,41 @@ def _render_skill_context(spec: SkillSpec | None) -> str:
 
 
 RecallMode = Literal["main", "interview"]
-_MAIN_RECALL_SKILLS = frozenset({"knowledge_qa"})
 
 
-def prepare_turn_context(
+async def prepare_turn_context(
     user_input: str,
     *,
     mode: RecallMode,
+    recent_dialogue: str = "",
     on_search: Callable[[], None] | None = None,
 ) -> tuple[SkillSpec | None, str, str]:
-    """Skill 路由 + 按需 RAG 召回（Workflow 节点入口）。"""
+    """Skill 向量路由 → RAG 门控 → 问句改写 → 粗召回 + 精排检索。"""
+    from common.query_rewrite import rewrite_search_queries
+    from common.rag import retrieve_context
+    from common.rag_gate import decide_rag_gate
+    from config.config import CORPUS_AGENT, CORPUS_INTERVIEW
+
     text = (user_input or "").strip()
     skills = AGENT_SKILLS if mode == "main" else INTERVIEW_SKILLS
     spec = _pick_skill(text, skills) if text else None
     skill_context = _render_skill_context(spec)
-    retrieved = ""
-    should_recall = bool(text) and (
-        mode == "interview" or (spec is not None and spec.name in _MAIN_RECALL_SKILLS)
-    )
-    if should_recall:
-        if on_search:
-            on_search()
-        from common.rag import search
-        from config.config import CORPUS_AGENT, CORPUS_INTERVIEW
+    skill_name = spec.name if spec else None
 
-        corpus = CORPUS_INTERVIEW if mode == "interview" else CORPUS_AGENT
-        retrieved = search(text, corpus=corpus)
+    retrieved = ""
+    if text:
+        need_rag = await decide_rag_gate(text, mode=mode, skill_name=skill_name)
+        if need_rag:
+            if on_search:
+                on_search()
+            questions = await rewrite_search_queries(
+                text,
+                mode=mode,
+                skill_name=skill_name,
+                recent_dialogue=recent_dialogue,
+            )
+            corpus = CORPUS_INTERVIEW if mode == "interview" else CORPUS_AGENT
+            retrieved = retrieve_context(questions, corpus=corpus)
     return spec, skill_context, retrieved
 
 

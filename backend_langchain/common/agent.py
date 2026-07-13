@@ -1,6 +1,6 @@
 """LangGraph Agent 核心：Workflow（skill_recall）+ Agent（model ↔ tools）、checkpoint、流式事件。
 
-START → skill_recall（Skill 路由 + 按需 RAG）→ agent → tools → agent …
+START → skill_recall（Skill 向量路由 + RAG 门控 LLM + 按需检索）→ agent → tools → agent …
 两个 Agent 共用 `build_agent_graph`，差异在 tools、system_prompt、recall_mode。
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.config import get_stream_writer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
@@ -33,7 +33,7 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(project_root))
 
 from common.skill_router import prepare_turn_context
-from config.config import get_qwen_chat_model
+from config.config import QUERY_REWRITE_CONTEXT_TURNS, get_qwen_chat_model
 
 RecallModeParam = Literal["main", "interview"]
 
@@ -133,6 +133,46 @@ def _latest_user_text(messages: list[BaseMessage]) -> str:
     return ""
 
 
+def format_recent_dialogue(
+    messages: list[BaseMessage],
+    *,
+    max_turns: int | None = None,
+) -> str:
+    """最近若干轮用户/助手对话，供检索问句改写补全指代。"""
+    cap = QUERY_REWRITE_CONTEXT_TURNS if max_turns is None else max(0, max_turns)
+    if cap <= 0 or not messages:
+        return ""
+
+    trimmed = messages
+    if trimmed and isinstance(trimmed[-1], HumanMessage):
+        trimmed = trimmed[:-1]
+    if not trimmed:
+        return ""
+
+    turns: list[tuple[str, str]] = []
+    pending_user = ""
+    for msg in trimmed:
+        if isinstance(msg, HumanMessage):
+            if pending_user:
+                turns.append((pending_user, ""))
+            pending_user = message_content_to_text(msg.content).strip()
+        elif isinstance(msg, AIMessage):
+            ai = message_content_to_text(msg.content).strip()
+            if pending_user:
+                turns.append((pending_user, ai))
+                pending_user = ""
+    if pending_user:
+        turns.append((pending_user, ""))
+
+    lines: list[str] = []
+    for user, assistant in turns[-cap:]:
+        if user:
+            lines.append(f"用户：{user}")
+        if assistant:
+            lines.append(f"助手：{assistant[:600]}")
+    return "\n".join(lines)
+
+
 def build_agent_graph(
     *,
     tools: Sequence[Any],
@@ -158,9 +198,10 @@ def build_agent_graph(
         def _on_search() -> None:
             writer({"type": "status", "text": "正在搜索..."})
 
-        spec, skill_context, retrieved = prepare_turn_context(
+        spec, skill_context, retrieved = await prepare_turn_context(
             user_text,
             mode=recall_mode,  # type: ignore[arg-type]
+            recent_dialogue=format_recent_dialogue(state["messages"]),
             on_search=_on_search,
         )
         return {
@@ -253,9 +294,9 @@ async def stream_graph_chat_model_events(
 
 def warmup_agent_executors(*, temperature: float = 0.45) -> None:
     """进程启动时预热三张流式图（主对话本地/联网 + 面试），避免首请求冷启动。"""
-    from Langchain_Agent import agents
+    from Langchain_Agent import runtime
 
-    agents.reset_stream_agent_cache()
-    agents.get_stream_agent_executor(temperature=temperature, enable_web_search=False)
-    agents.get_stream_agent_executor(temperature=temperature, enable_web_search=True)
-    agents.get_stream_interview_executor(temperature=temperature)
+    runtime.reset_stream_agent_cache()
+    runtime.get_stream_agent_executor(temperature=temperature, enable_web_search=False)
+    runtime.get_stream_agent_executor(temperature=temperature, enable_web_search=True)
+    runtime.get_stream_interview_executor(temperature=temperature)

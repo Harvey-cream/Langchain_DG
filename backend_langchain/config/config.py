@@ -28,7 +28,11 @@ KNOWLEDGE_DIR_NAME = "Langchain_knowledge"
 
 _rag = rag_config()
 COLLECTION = _rag["collection"]
-TOP_K = _rag["top_k"]
+RECALL_K = _rag["recall_k"]
+RERANK_TOP_K = _rag["rerank_top_k"]
+RAG_MAX_DISTANCE = _rag["max_distance"]
+QUERY_REWRITE_MAX_QUESTIONS = _rag["query_rewrite_max_questions"]
+QUERY_REWRITE_CONTEXT_TURNS = _rag["query_rewrite_context_turns"]
 DOCS_AGENT = _rag["docs_agent"]
 DOCS_INTERVIEW = _rag["docs_interview"]
 DEFAULT_CHUNK_SIZE = _rag["chunk_size"]
@@ -92,6 +96,10 @@ def dashscope_dimensions() -> int:
 
 def dashscope_embedding_batch_size() -> int:
     return int(dashscope_config()["embedding_batch_size"])
+
+
+def dashscope_rerank_model() -> str:
+    return str(dashscope_config()["rerank_model"])
 
 
 DASHSCOPE_EMBEDDING_BASE_URL = dashscope_config()["embedding_base_url"]

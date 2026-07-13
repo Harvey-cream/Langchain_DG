@@ -29,7 +29,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from chunk import agent_markdown_chunks, existing_source_paths, interview_pdf_chunks
-from common.embedding import get_dashscope_embedding_model
+from common.embedding import get_rag_embedding_model
 from config.config import (
     COLLECTION,
     CORPUS_AGENT,
@@ -111,7 +111,7 @@ def build_rag_knowledge(
     chunk_overlap: int = 150,
     strip_images: bool = True,
 ) -> None:
-    emb = get_dashscope_embedding_model()
+    emb = get_rag_embedding_model()
     root = knowledge_root()
     print(f"DashScope {dashscope_model_name()} ({dashscope_dimensions()} 维) → {chroma_dir}")
 

@@ -29,7 +29,7 @@ _QUICK = {"main": quick_agent_greeting_prompt, "interview": quick_interview_gree
 
 
 def _stream_fn(kind: AgentKind):
-    from Langchain_Agent.agents import stream_agent, stream_interview_agent
+    from Langchain_Agent.runtime import stream_agent, stream_interview_agent
 
     return stream_agent if kind == "main" else stream_interview_agent
 

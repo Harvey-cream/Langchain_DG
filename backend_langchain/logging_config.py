@@ -13,7 +13,7 @@ LOGGING = {
         "common.embedding": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "common.skill_router": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "Langchain_Agent.tools": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "app.routers.agent": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "app.routers.api": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "MCP.mcp_multiserver": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "chromadb.telemetry": {"handlers": ["console"], "level": "CRITICAL", "propagate": False},
         "chromadb.telemetry.product.posthog": {

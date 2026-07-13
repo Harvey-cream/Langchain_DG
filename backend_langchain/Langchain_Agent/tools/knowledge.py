@@ -60,16 +60,16 @@ def _mcp_tool_with_sync_invoke(tool: object) -> object:
 
 
 def get_all_agent_tools(*, enable_web_search: bool = False) -> list:
-    from human_in_the_loop.human_loop import confirm_pdf_export, finalize_pdf_export
+    from common.tools import get_builtin_pdf_tools
     from MCP.mcp_multiserver import load_mcp_tools_once
 
     mcp_tools = [_mcp_tool_with_sync_invoke(t) for t in load_mcp_tools_once()]
     if not enable_web_search:
         mcp_tools = [t for t in mcp_tools if not _is_tavily_tool(t)]
-    return [confirm_pdf_export, finalize_pdf_export] + mcp_tools
+    return get_builtin_pdf_tools() + mcp_tools
 
 
 def get_interview_tools() -> list:
-    from human_in_the_loop.human_loop import confirm_pdf_export, finalize_pdf_export
+    from common.tools import get_builtin_pdf_tools
 
-    return [confirm_pdf_export, finalize_pdf_export]
+    return get_builtin_pdf_tools()

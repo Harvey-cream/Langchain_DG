@@ -1,31 +1,25 @@
-"""LangGraph 人机协同：PDF 导出意图确认（interrupt + Command.resume）与成稿导出工具。"""
+"""LangGraph 人机协同：interrupt 解析与 PDF 工具回传剥离（工具定义见 common.tools）。"""
 
 from __future__ import annotations
 
-import logging
 import re
 from typing import Any
 
-from langchain_core.tools import tool
-from langgraph.types import Interrupt, interrupt
-from backend_langchain.logger_func import log_exception_event
+from langgraph.types import Interrupt
 
-logger = logging.getLogger(__name__)
-
-PDF_EXPORT_INTERRUPT_KIND = "pdf_export_confirm"
-PDF_READY_MARKER = "__PDF_READY__"
-
-# 工具返回给模型的内部提示；流式/落库需剥离，避免当作用户可见正文
-PDF_EXPORT_TOOL_MSG_CONFIRM = (
-    "[系统] 用户已确认生成 PDF。请结合对话与用户指定范围完成润色后，调用工具 finalize_pdf_export 一次"
-    "（title=文档标题，body_markdown=完整 Markdown 成稿）；勿再次调用 confirm_pdf_export。"
+from common.tools import (
+    PDF_EXPORT_TOOL_MSG_CANCEL,
+    PDF_EXPORT_TOOL_MSG_CONFIRM,
+    PDF_EXPORT_INTERRUPT_KIND,
 )
-PDF_EXPORT_TOOL_MSG_CANCEL = (
-    "[系统] 用户已取消 PDF 导出，请仅用自然语言友好回复，勿生成 PDF 或下载链接。"
-)
+
+# 向后兼容：外部仍可从 human_loop 导入工具
+from common.tools import confirm_pdf_export, finalize_pdf_export  # noqa: F401
 
 # 模型常整段复述工具返回值；流式按块到达时用正则兜一层
 _SYS_PDF_ECHO = re.compile(r"\[系统\]\s*用户已[^。\n]*PDF[^。\n]*。")
+
+_PDF_READY_LINE_RE = re.compile(r"^\s*__PDF_READY__\|[^\n]+\s*$", re.MULTILINE)
 
 
 def strip_pdf_export_tool_echo(text: str) -> str:
@@ -39,10 +33,6 @@ def strip_pdf_export_tool_echo(text: str) -> str:
     )
 
 
-# finalize_pdf_export 内部标记；勿展示给用户
-_PDF_READY_LINE_RE = re.compile(r"^\s*__PDF_READY__\|[^\n]+\s*$", re.MULTILINE)
-
-
 def strip_pdf_internal_markers(text: str) -> str:
     """剥离所有人机协同 PDF 工具的内部回传/标记，勿进流式与落库可见正文。"""
     if not (text or "").strip():
@@ -50,47 +40,6 @@ def strip_pdf_internal_markers(text: str) -> str:
     s = strip_pdf_export_tool_echo(text)
     s = _PDF_READY_LINE_RE.sub("", s)
     return s
-
-
-def pdf_export_interrupt_value() -> dict[str, str]:
-    return {
-        "kind": PDF_EXPORT_INTERRUPT_KIND,
-        "message": "是否生成 PDF？请在界面点击「确认」或「取消」（无需在聊天里打字）。",
-    }
-
-
-@tool("confirm_pdf_export")
-async def confirm_pdf_export() -> str:
-    """当用户需要导出/生成 PDF 或正式排版文档时，在输出实质条文前调用本工具一次，等待界面按钮确认。确认后继续 PDF 相关流程；取消则仅自然语言回复。"""
-    from langgraph.config import get_stream_writer
-
-    get_stream_writer()({"type": "status", "text": "等待确认 PDF 导出…"})
-    approved = interrupt(pdf_export_interrupt_value())
-    if approved is True:
-        return PDF_EXPORT_TOOL_MSG_CONFIRM
-    return PDF_EXPORT_TOOL_MSG_CANCEL
-
-
-@tool("finalize_pdf_export")
-async def finalize_pdf_export(title: str, body_markdown: str) -> str:
-    """仅在工具 confirm_pdf_export 已返回「用户已确认」之后调用一次（勿重复调用）。根据用户指定范围与对话上下文，先在心里完成润色与排版，将最终交付用的完整 Markdown 写入 body_markdown（可含标题层级、列表、代码围栏）；title 为文档标题。调用成功后浏览器将自动下载 PDF，你只需用一两句自然话告知用户已可下载，勿复述工具返回值或任何 __ 开头的内部标记。"""
-    try:
-        from human_in_the_loop.pdf_export_render import write_conversation_pdf
-
-        rel, fname = write_conversation_pdf(title, body_markdown)
-        from langgraph.config import get_stream_writer
-
-        get_stream_writer()({"type": "pdf_ready", "url": rel, "filename": fname})
-        return f"{PDF_READY_MARKER}|{rel}|{fname}"
-    except Exception as e:
-        log_exception_event(logger, "finalize_pdf_export_failed")
-        hint = str(e).strip()
-        if "缺少依赖" in hint or "markdown" in hint.lower():
-            return (
-                "[系统] PDF 生成失败：后端未安装 markdown/xhtml2pdf，或 pip 装在了别的 Python 环境。"
-                "请对**运行后端的同一 Python 解释器**执行 pip install markdown xhtml2pdf 后重试。"
-            )
-        return "[系统] PDF 生成失败，请用自然语言向用户致歉并建议稍后重试，勿伪造下载链接。"
 
 
 def interrupt_payload_from_updates(data: Any) -> dict[str, Any] | None:
@@ -115,4 +64,3 @@ def interrupt_payload_from_updates(data: Any) -> dict[str, Any] | None:
             if got:
                 return got
     return None
-

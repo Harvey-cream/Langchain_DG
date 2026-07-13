@@ -54,6 +54,16 @@ def _dashscope_openai_compatible_embeddings(api_key: str, model: str, *, dimensi
     return OpenAIEmbeddings(**kwargs)
 
 
+def get_rag_embedding_model() -> Embeddings:
+    """RAG 建库与查询共用；必须与 build_rag_knowledge.py 一致（DashScope）。"""
+    if not dashscope_api_key():
+        raise RuntimeError(
+            "RAG 需要 DashScope 嵌入：请在 settings_*.yaml 的 dashscope.api_key "
+            "或环境变量 DASHSCOPE_API_KEY 中设置（与建库脚本相同）"
+        )
+    return get_dashscope_embedding_model()
+
+
 def get_dashscope_embedding_model() -> Embeddings:
     """百炼向量 API（建库脚本与生产 RAG 统一使用）。"""
     key = _dashscope_cache_key()

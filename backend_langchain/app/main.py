@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import init_db_tables
-from app.routers import agent, interview, user
+from app.routers import api, interview, user
 from app.settings import MEDIA_ROOT
 from common.agent import close_checkpointer, init_checkpointer, warmup_agent_executors
 from logging_config import LOGGING
@@ -78,7 +78,7 @@ MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=str(MEDIA_ROOT)), name="media")
 
 app.include_router(user.router)
-app.include_router(agent.router)
+app.include_router(api.router)
 app.include_router(interview.router)
 
 

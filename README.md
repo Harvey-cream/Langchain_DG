@@ -84,13 +84,13 @@ backend_langchain/
 ├── app/                    # FastAPI 应用主目录
 │   ├── main.py            # 应用入口
 │   ├── routers/          # API 路由
-│   │   ├── agent.py      # Agent 对话接口
+│   │   ├── api.py        # 超级智能体 HTTP 接口
 │   │   ├── interview.py # 面试助手接口
 │   │   └── user.py      # 用户认证接口
 │   ├── models.py         # SQLAlchemy 模型
 │   └── settings.py       # 配置管理
 ├── Langchain_Agent/       # Agent 核心逻辑
-│   ├── agents.py        # Agent 构建
+│   ├── runtime.py       # Agent 运行时（图缓存、流式入口）
 │   └── tools/          # 工具函数
 ├── Agent_memory/         # 对话记忆管理
 ├── common/              # 公共模块
