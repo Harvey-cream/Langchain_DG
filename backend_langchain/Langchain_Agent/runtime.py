@@ -10,6 +10,7 @@ from typing import Any
 from langgraph.graph.state import CompiledStateGraph
 
 from common.agent import build_agent_graph, stream_graph_chat_model_events
+from Agent_memory.memory_persist import MemoryTurnContext
 from Langchain_Agent.prompts import AGENT_SYSTEM_PREFIX, INTERVIEW_SYSTEM_PREFIX
 from Langchain_Agent.tools.knowledge import get_all_agent_tools, get_interview_tools
 
@@ -75,6 +76,7 @@ async def stream_agent(
     temperature: float = 0.45,
     resume_pdf: bool | None = None,
     enable_web_search: bool = False,
+    memory: MemoryTurnContext | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     agent = get_stream_agent_executor(temperature=temperature, enable_web_search=enable_web_search)
     async for evt in stream_graph_chat_model_events(
@@ -82,6 +84,7 @@ async def stream_agent(
         prompt_text=prompt_text,
         thread_id=thread_id,
         resume_pdf=resume_pdf,
+        memory=memory,
     ):
         yield evt
 
@@ -92,6 +95,7 @@ async def stream_interview_agent(
     thread_id: str,
     temperature: float = 0.45,
     resume_pdf: bool | None = None,
+    memory: MemoryTurnContext | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     agent = get_stream_interview_executor(temperature=temperature)
     async for evt in stream_graph_chat_model_events(
@@ -99,5 +103,6 @@ async def stream_interview_agent(
         prompt_text=prompt_text,
         thread_id=thread_id,
         resume_pdf=resume_pdf,
+        memory=memory,
     ):
         yield evt

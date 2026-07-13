@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from Agent_memory.memory_persist import MemoryTurnContext
 from app.utils import format_datetime
 from backend_langchain.logger_func import log_exception_event
 from common.agent import message_content_to_text
@@ -54,6 +55,7 @@ async def stream_chat_events(
     temperature: float = 0.45,
     resume_pdf: bool | None = None,
     enable_web_search: bool = False,
+    memory: MemoryTurnContext | None = None,
 ) -> AsyncIterator[dict]:
     """统一事件流：delta / status / interrupt / pdf_ready。"""
     fn = _stream_fn(kind)
@@ -86,6 +88,7 @@ async def stream_chat_events(
                 prompt_text=user_input.strip(),
                 thread_id=tid,
                 temperature=temperature,
+                memory=memory,
                 **extra,
             ):
                 yield evt
@@ -165,6 +168,12 @@ async def iter_sse_chat(
 ) -> AsyncIterator[bytes]:
     yield sse_bytes({"type": "meta", "conversation_id": conversation_id, "session_id": session_id})
 
+    memory = MemoryTurnContext(
+        user_id=int(session_obj.user_id),
+        conversation_id=conversation_id,
+        kind=kind,
+    )
+
     events: list[dict] = []
     err: BaseException | None = None
 
@@ -175,6 +184,7 @@ async def iter_sse_chat(
             thread_id=thread_id,
             resume_pdf=resume_pdf,
             enable_web_search=enable_web_search,
+            memory=memory,
         ):
             events.append(item)
             if chunk := _to_sse(item):

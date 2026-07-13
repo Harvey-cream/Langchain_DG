@@ -23,6 +23,7 @@ from langgraph.types import Command
 from typing_extensions import TypedDict
 
 from Agent_memory.memory import maybe_compress_history
+from Agent_memory.memory_persist import MemoryTurnContext
 from human_in_the_loop.human_loop import interrupt_payload_from_updates
 from backend_langchain.logger_func import log_warning_event
 
@@ -243,9 +244,14 @@ def build_agent_graph(
 # =============================================================================
 
 
-async def _compress_history_safely(agent: CompiledStateGraph, thread_id: str) -> None:
+async def _compress_history_safely(
+    agent: CompiledStateGraph,
+    thread_id: str,
+    *,
+    memory: MemoryTurnContext | None = None,
+) -> None:
     try:
-        await maybe_compress_history(agent, thread_id=thread_id)
+        await maybe_compress_history(agent, thread_id=thread_id, memory=memory)
     except Exception as e:  # noqa: BLE001
         log_warning_event(logger, "memory_compress_skipped", thread_id=thread_id, error=str(e))
 
@@ -256,12 +262,13 @@ async def stream_graph_chat_model_events(
     prompt_text: str = "",
     thread_id: str,
     resume_pdf: bool | None = None,
+    memory: MemoryTurnContext | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """流式产出事件：delta / status / interrupt / pdf_ready（custom + updates）。"""
     if resume_pdf is not None:
         graph_input: Any = Command(resume=resume_pdf)
     else:
-        await _compress_history_safely(agent, thread_id)
+        await _compress_history_safely(agent, thread_id, memory=memory)
         graph_input = {
             "messages": [HumanMessage(content=prompt_text)],
             "skill_name": "",
