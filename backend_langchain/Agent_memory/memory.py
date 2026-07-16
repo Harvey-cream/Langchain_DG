@@ -26,19 +26,19 @@ def _memory_compression_enabled() -> bool:
 # ===========================================================================
 
 def _memory_keep_last_turns() -> int:
-    raw = (os.getenv("MEMORY_KEEP_LAST_TURNS", "6") or "6").strip()
+    raw = (os.getenv("MEMORY_KEEP_LAST_TURNS", "4") or "4").strip()
     try:
         return max(1, int(raw))
     except ValueError:
-        return 6
+        return 4
 
 
 def _memory_max_turns_before_compress() -> int:
-    raw = (os.getenv("MEMORY_MAX_TURNS", "12") or "12").strip()
+    raw = (os.getenv("MEMORY_MAX_TURNS", "8") or "8").strip()
     try:
         n = int(raw)
     except ValueError:
-        n = 12
+        n = 8
     return max(_memory_keep_last_turns() + 1, n)
 
 
@@ -55,8 +55,8 @@ def _memory_min_overflow_turns() -> int:
 # ===========================================================================
 
 def _memory_token_budget() -> int:
-    """历史 messages 超过此估算 token 即触发压缩（默认 30k）。"""
-    direct = (os.getenv("MEMORY_TOKEN_BUDGET", "30000") or "30000").strip()
+    """历史 messages 超过此估算 token 即触发压缩（默认 16k，兼顾多轮连贯与输入速度）。"""
+    direct = (os.getenv("MEMORY_TOKEN_BUDGET", "16000") or "16000").strip()
     try:
         return max(4096, int(direct))
     except ValueError:

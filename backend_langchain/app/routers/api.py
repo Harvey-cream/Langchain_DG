@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +38,7 @@ class StreamBody(BaseModel):
     conversation_id: int | None = None
     resume_pdf_export: bool | None = None
     enable_web_search: bool | None = None
+    attachments: list[dict] = Field(default_factory=list)
 
 
 class ConversationPatchBody(BaseModel):
@@ -189,6 +190,7 @@ async def chat_stream(
             log_prefix="chat_stream",
             resume_pdf=resume_pdf,
             enable_web_search=enable_web_search,
+            attachments=body.attachments,
         )
     )
 

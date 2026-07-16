@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Modal, message } from 'antd';
-import { CopyOutlined } from '@ant-design/icons';
+import { CloseOutlined, CopyOutlined, PaperClipOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import { createRoot, type Root } from 'react-dom/client';
 import remarkGfm from 'remark-gfm';
@@ -9,7 +9,7 @@ import remarkBreaks from 'remark-breaks';
 import type { Components } from 'react-markdown';
 import { getUserInfo } from '../../services/api';
 import type { ChatApiClient } from '../../services/chatApi';
-import { formatAssistantDisplayText } from '../../services/chatStream';
+import { formatAssistantDisplayText, type ChatAttachment } from '../../services/chatStream';
 import ChatSidebar, { ConversationItem } from './ChatSidebar';
 import './Chat.css';
 
@@ -18,6 +18,7 @@ export interface Message {
   content: string;
   isUser: boolean;
   timestamp: string;
+  attachments?: ChatAttachment[];
 }
 
 export type ChatPageProps = {
@@ -34,12 +35,15 @@ type ChatViewProps = {
   activeConversationId?: number;
   messages: Message[];
   inputMessage: string;
+  attachments: ChatAttachment[];
   isLoading: boolean;
   messagesEndRef: React.RefObject<HTMLDivElement>;
   messagesContainerRef: React.RefObject<HTMLDivElement>;
   onInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
   onSendMessage: () => void;
+  onAttachFiles: (files: FileList | null) => void;
+  onRemoveAttachment: (id: string) => void;
   enableWebSearch: boolean;
   onToggleWebSearch: () => void;
   streamActive: boolean;
@@ -148,6 +152,60 @@ const CHAT_MD_COMPONENTS: Components = {
   },
 };
 const CHAT_REMARK_PLUGINS = [remarkGfm, remarkBreaks];
+const MAX_ATTACHMENT_COUNT = 3;
+const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024;
+const MAX_TEXT_ATTACHMENT_CHARS = 60000;
+
+function isTextFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return (
+    file.type.startsWith('text/') ||
+    /\.(txt|md|markdown|json|csv|tsv|js|jsx|ts|tsx|py|java|go|rs|c|cpp|h|hpp|css|html|xml|yaml|yml|log)$/i.test(name)
+  );
+}
+
+function isPdfFile(file: File): boolean {
+  return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+}
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function fileToAttachment(file: File): Promise<ChatAttachment | null> {
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    message.warning(`${file.name} 超过 3MB，已跳过`);
+    return null;
+  }
+  const base = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name: file.name,
+    mime_type: file.type || 'application/octet-stream',
+    size: file.size,
+  };
+  if (file.type.startsWith('image/')) {
+    return { ...base, kind: 'image', data_url: await readAsDataUrl(file) };
+  }
+  if (isPdfFile(file)) {
+    return { ...base, kind: 'pdf', data_url: await readAsDataUrl(file) };
+  }
+  if (isTextFile(file)) {
+    const text = await file.text();
+    return { ...base, kind: 'text', text: text.slice(0, MAX_TEXT_ATTACHMENT_CHARS) };
+  }
+  message.warning(`${file.name} 暂不支持，请上传图片、PDF 或文本/代码文件`);
+  return null;
+}
+
+function attachmentLabel(item: ChatAttachment): string {
+  const kindLabel = item.kind === 'image' ? '图片' : item.kind === 'pdf' ? 'PDF' : '文件';
+  return `${kindLabel}：${item.name}`;
+}
 
 /** 流式中：纯文本增量（避免每帧全量 remark 解析）；结束后：Markdown */
 const AssistantBubbleContent = React.memo(function AssistantBubbleContent({
@@ -182,12 +240,15 @@ const ChatView: React.FC<ChatViewProps> = ({
   activeConversationId,
   messages,
   inputMessage,
+  attachments,
   isLoading,
   messagesEndRef,
   messagesContainerRef,
   onInputChange,
   onKeyDown,
   onSendMessage,
+  onAttachFiles,
+  onRemoveAttachment,
   enableWebSearch,
   onToggleWebSearch,
   streamActive,
@@ -254,7 +315,18 @@ const ChatView: React.FC<ChatViewProps> = ({
                   className={`message-content ${msg.isUser ? '' : 'message-content-md'}`}
                 >
                   {msg.isUser ? (
-                    msg.content
+                    <>
+                      {msg.content}
+                      {msg.attachments?.length ? (
+                        <div className="chat-attachment-list chat-attachment-list-message">
+                          {msg.attachments.map(item => (
+                            <span key={item.id} className="chat-attachment-chip">
+                              {attachmentLabel(item)}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </>
                   ) : (
                     <>
                       {streamThis ? (
@@ -342,7 +414,38 @@ const ChatView: React.FC<ChatViewProps> = ({
         </div>
 
         <div className="chat-input-area">
+          {attachments.length ? (
+            <div className="chat-attachment-list">
+              {attachments.map(item => (
+                <span key={item.id} className="chat-attachment-chip">
+                  {attachmentLabel(item)}
+                  <button
+                    type="button"
+                    className="chat-attachment-remove"
+                    aria-label={`移除 ${item.name}`}
+                    onClick={() => onRemoveAttachment(item.id)}
+                    disabled={inputLocked}
+                  >
+                    <CloseOutlined />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="chat-input-row">
+            <label className={`chat-attach-button ${inputLocked ? 'disabled' : ''}`} title="上传图片、PDF 或文本文件">
+              <PaperClipOutlined />
+              <input
+                type="file"
+                multiple
+                accept="image/*,.pdf,.txt,.md,.markdown,.json,.csv,.tsv,.js,.jsx,.ts,.tsx,.py,.java,.go,.rs,.c,.cpp,.h,.hpp,.css,.html,.xml,.yaml,.yml,.log"
+                disabled={inputLocked}
+                onChange={e => {
+                  onAttachFiles(e.target.files);
+                  e.currentTarget.value = '';
+                }}
+              />
+            </label>
             <button
               type="button"
               className={`web-search-toggle ${enableWebSearch ? 'active' : ''}`}
@@ -369,7 +472,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                 type="button"
                 onClick={onSendMessage}
                 className="send-button"
-                disabled={inputLocked || !inputMessage.trim()}
+                disabled={inputLocked || (!inputMessage.trim() && attachments.length === 0)}
               >
                 发送
               </button>
@@ -385,6 +488,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
   const [messages, setMessages] = useState<Message[]>(() => [welcomeMessage]);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [inputMessage, setInputMessage] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingConversationId, setLoadingConversationId] = useState<number | undefined>(undefined);
   const [conversationId, setConversationId] = useState<number | undefined>(undefined);
@@ -416,9 +520,11 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
   const streamingContentRef = useRef<HTMLDivElement | null>(null);
   const streamingRenderRootRef = useRef<Root | null>(null);
   const streamingRenderHostRef = useRef<HTMLDivElement | null>(null);
+  const skipNextAttachmentPersistRef = useRef(false);
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const activeConversationStorageKey = `chat.activeConversationId:${pathname}`;
+  const pendingAttachmentStorageKey = `chat.pendingAttachments:${pathname}`;
 
   const disposeStreamingDomRenderer = useCallback(() => {
     if (streamingRenderRootRef.current) {
@@ -438,6 +544,57 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     },
     [activeConversationStorageKey]
   );
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(pendingAttachmentStorageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      skipNextAttachmentPersistRef.current = true;
+      setPendingAttachments(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      skipNextAttachmentPersistRef.current = true;
+      setPendingAttachments([]);
+    }
+  }, [pendingAttachmentStorageKey]);
+
+  useEffect(() => {
+    if (skipNextAttachmentPersistRef.current) {
+      skipNextAttachmentPersistRef.current = false;
+      return;
+    }
+    try {
+      if (pendingAttachments.length) {
+        sessionStorage.setItem(pendingAttachmentStorageKey, JSON.stringify(pendingAttachments));
+      } else {
+        sessionStorage.removeItem(pendingAttachmentStorageKey);
+      }
+    } catch {
+      message.warning('附件缓存空间不足，刷新后可能需要重新选择附件');
+    }
+  }, [pendingAttachmentStorageKey, pendingAttachments]);
+
+  const handleAttachFiles = useCallback(async (files: FileList | null) => {
+    if (!files?.length) return;
+    const remaining = MAX_ATTACHMENT_COUNT - pendingAttachments.length;
+    if (remaining <= 0) {
+      message.warning(`最多同时上传 ${MAX_ATTACHMENT_COUNT} 个附件`);
+      return;
+    }
+    const selected = Array.from(files).slice(0, remaining);
+    const next = (await Promise.all(selected.map(fileToAttachment))).filter(
+      (item): item is ChatAttachment => item !== null
+    );
+    if (next.length) {
+      setPendingAttachments(prev => [...prev, ...next].slice(0, MAX_ATTACHMENT_COUNT));
+    }
+    if (files.length > remaining) {
+      message.warning(`最多同时上传 ${MAX_ATTACHMENT_COUNT} 个附件，多余文件已跳过`);
+    }
+  }, [pendingAttachments.length]);
+
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setPendingAttachments(prev => prev.filter(item => item.id !== id));
+  }, []);
 
   const cancelTypewriter = useCallback(() => {
     if (typewriterRafRef.current != null) {
@@ -971,7 +1128,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       return;
     }
 
-    const messageText = inputMessage.trim();
+    const attachmentsForSend = pendingAttachments;
+    const messageText = inputMessage.trim() || (attachmentsForSend.length ? '请理解这些附件。' : '');
     if (!messageText) return;
 
     const startConversationId = conversationIdRef.current;
@@ -987,10 +1145,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       content: messageText,
       isUser: true,
       timestamp: new Date().toLocaleTimeString(),
+      attachments: attachmentsForSend,
     };
 
     setMessages(prev => [...prev, userMessage]);
     setInputMessage('');
+    setPendingAttachments([]);
     setIsLoading(true);
     setLoadingConversationId(startConversationId);
 
@@ -1008,6 +1168,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       await chatApi.chatWithStream(messageText, conversationId, cb, {
         signal: abortController.signal,
         enableWebSearch,
+        attachments: attachmentsForSend,
       });
 
       if (conversationIdRef.current !== startConversationId) {
@@ -1251,12 +1412,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
         activeConversationId={conversationId}
         messages={messages}
         inputMessage={inputMessage}
+        attachments={pendingAttachments}
         isLoading={showLoading}
         messagesEndRef={messagesEndRef}
         messagesContainerRef={messagesContainerRef}
         onInputChange={(e) => setInputMessage(e.target.value)}
         onKeyDown={handleKeyDown}
         onSendMessage={handleSendMessage}
+        onAttachFiles={(files) => void handleAttachFiles(files)}
+        onRemoveAttachment={handleRemoveAttachment}
         enableWebSearch={enableWebSearch}
         onToggleWebSearch={() => setEnableWebSearch(v => !v)}
         streamActive={streamActive}

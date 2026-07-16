@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +33,7 @@ class StreamBody(BaseModel):
     message: str = ""
     conversation_id: int | None = None
     resume_pdf_export: bool | None = None
+    attachments: list[dict] = Field(default_factory=list)
 
 
 class ConversationPatchBody(BaseModel):
@@ -179,6 +180,7 @@ async def chat_stream(
             conversation=conversation,
             log_prefix="interview_chat_stream",
             resume_pdf=resume_pdf,
+            attachments=body.attachments,
         )
     )
 

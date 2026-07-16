@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.config import get_stream_writer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
@@ -33,6 +34,7 @@ if __package__ in {None, ""}:
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
+from common.pdf_extract import extract_pdf_text_from_data_url
 from common.skill_router import prepare_turn_context
 from config.config import QUERY_REWRITE_CONTEXT_TURNS, get_qwen_chat_model
 
@@ -113,6 +115,82 @@ def _graph_recursion_limit() -> int:
 
 def _graph_config(thread_id: str) -> dict[str, Any]:
     return {"recursion_limit": _graph_recursion_limit(), "configurable": {"thread_id": thread_id}}
+
+
+_MAX_ATTACHMENT_TEXT_CHARS = 20_000
+
+
+def _attachment_prompt_text(attachments: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for i, item in enumerate(attachments, start=1):
+        kind = str(item.get("kind") or "").lower()
+        name = str(item.get("name") or f"attachment-{i}").strip()
+        mime = str(item.get("mime_type") or "").strip()
+        if kind == "text":
+            text = str(item.get("text") or "").strip()
+            if text:
+                parts.append(
+                    f"附件 {i}: {name} ({mime or 'text/plain'})\n"
+                    f"```text\n{text[:_MAX_ATTACHMENT_TEXT_CHARS]}\n```"
+                )
+        elif kind == "pdf":
+            data_url = str(item.get("data_url") or "").strip()
+            text = extract_pdf_text_from_data_url(data_url) if data_url else ""
+            if text:
+                parts.append(
+                    f"附件 {i}: {name} ({mime or 'application/pdf'})\n"
+                    f"```text\n{text[:_MAX_ATTACHMENT_TEXT_CHARS]}\n```"
+                )
+            elif data_url:
+                parts.append(
+                    f"附件 {i}: {name} ({mime or 'application/pdf'})"
+                    " — 未能抽取到可读文本（可能为扫描件或空文档）。"
+                )
+        elif kind == "image":
+            parts.append(f"附件 {i}: {name} ({mime or 'image/*'})，图片内容见随消息附带的 image_url。")
+    if not parts:
+        return ""
+    return "【用户上传的附件，仅用于理解本轮问题】\n" + "\n\n".join(parts)
+
+
+def _image_blocks(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    for item in attachments:
+        if str(item.get("kind") or "").lower() != "image":
+            continue
+        url = str(item.get("data_url") or "").strip()
+        if not url.startswith("data:image/"):
+            continue
+        blocks.append({"type": "image_url", "image_url": {"url": url}})
+    return blocks
+
+
+def _messages_with_transient_attachments(
+    messages: list[BaseMessage],
+    attachments: list[dict[str, Any]] | None,
+) -> list[BaseMessage]:
+    if not attachments:
+        return messages
+    attach_text = _attachment_prompt_text(attachments)
+    image_blocks = _image_blocks(attachments)
+    if not attach_text and not image_blocks:
+        return messages
+
+    out = list(messages)
+    for idx in range(len(out) - 1, -1, -1):
+        msg = out[idx]
+        if not isinstance(msg, HumanMessage):
+            continue
+        text = message_content_to_text(msg.content).strip()
+        merged_text = f"{text}\n\n{attach_text}".strip() if attach_text else text
+        if image_blocks:
+            out[idx] = HumanMessage(
+                content=[{"type": "text", "text": merged_text or "请理解这些附件。"}, *image_blocks]
+            )
+        else:
+            out[idx] = HumanMessage(content=merged_text)
+        return out
+    return messages
 
 
 # =============================================================================
@@ -211,7 +289,7 @@ def build_agent_graph(
             "retrieved_context": retrieved,
         }
 
-    async def agent_node(state: AgentState) -> dict[str, list[BaseMessage]]:
+    async def agent_node(state: AgentState, config: RunnableConfig) -> dict[str, list[BaseMessage]]:
         prefix: list[BaseMessage] = [system_message]
         if sc := (state.get("skill_context") or "").strip():
             prefix.append(SystemMessage(content=sc))
@@ -220,7 +298,12 @@ def build_agent_graph(
                 SystemMessage(content=f"【检索参考（内部，勿照抄原文）】\n{rc}")
             )
         gathered: BaseMessage | None = None
-        async for chunk in model.astream(prefix + state["messages"]):
+        cfg = config.get("configurable") or {}
+        messages = _messages_with_transient_attachments(
+            state["messages"],
+            cfg.get("attachments") if isinstance(cfg.get("attachments"), list) else None,
+        )
+        async for chunk in model.astream(prefix + messages):
             if text := message_content_to_text(getattr(chunk, "content", None)):
                 get_stream_writer()({"type": "delta", "text": text})
             gathered = chunk if gathered is None else gathered + chunk  # type: ignore[operator]
@@ -262,6 +345,7 @@ async def stream_graph_chat_model_events(
     prompt_text: str = "",
     thread_id: str,
     resume_pdf: bool | None = None,
+    attachments: list[dict] | None = None,
     memory: MemoryTurnContext | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """流式产出事件：delta / status / interrupt / pdf_ready（custom + updates）。"""
@@ -278,8 +362,12 @@ async def stream_graph_chat_model_events(
 
     seen_pdf: set[tuple[str, str]] = set()
 
+    config = _graph_config(thread_id)
+    if attachments:
+        config["configurable"]["attachments"] = attachments
+
     async for mode, payload in agent.astream(
-        graph_input, _graph_config(thread_id), stream_mode=["custom", "updates"]
+        graph_input, config, stream_mode=["custom", "updates"]
     ):
         if mode == "custom" and isinstance(payload, dict):
             t = payload.get("type")

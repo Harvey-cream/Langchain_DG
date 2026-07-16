@@ -76,6 +76,7 @@ async def stream_agent(
     temperature: float = 0.45,
     resume_pdf: bool | None = None,
     enable_web_search: bool = False,
+    attachments: list[dict] | None = None,
     memory: MemoryTurnContext | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     agent = get_stream_agent_executor(temperature=temperature, enable_web_search=enable_web_search)
@@ -84,6 +85,7 @@ async def stream_agent(
         prompt_text=prompt_text,
         thread_id=thread_id,
         resume_pdf=resume_pdf,
+        attachments=attachments,
         memory=memory,
     ):
         yield evt
@@ -95,6 +97,7 @@ async def stream_interview_agent(
     thread_id: str,
     temperature: float = 0.45,
     resume_pdf: bool | None = None,
+    attachments: list[dict] | None = None,
     memory: MemoryTurnContext | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     agent = get_stream_interview_executor(temperature=temperature)
@@ -103,6 +106,7 @@ async def stream_interview_agent(
         prompt_text=prompt_text,
         thread_id=thread_id,
         resume_pdf=resume_pdf,
+        attachments=attachments,
         memory=memory,
     ):
         yield evt

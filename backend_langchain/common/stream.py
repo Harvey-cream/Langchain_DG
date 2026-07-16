@@ -55,6 +55,7 @@ async def stream_chat_events(
     temperature: float = 0.45,
     resume_pdf: bool | None = None,
     enable_web_search: bool = False,
+    attachments: list[dict] | None = None,
     memory: MemoryTurnContext | None = None,
 ) -> AsyncIterator[dict]:
     """统一事件流：delta / status / interrupt / pdf_ready。"""
@@ -74,7 +75,7 @@ async def stream_chat_events(
     if not (user_input or "").strip():
         raise ValueError("user_input is empty")
 
-    if quick := _QUICK[kind](user_input):
+    if not attachments and (quick := _QUICK[kind](user_input)):
         llm = get_qwen_chat_model(temperature=temperature, streaming=True)
         async for chunk in llm.astream([HumanMessage(content=quick)]):
             if text := message_content_to_text(getattr(chunk, "content", chunk)):
@@ -89,6 +90,7 @@ async def stream_chat_events(
                 thread_id=tid,
                 temperature=temperature,
                 memory=memory,
+                attachments=attachments,
                 **extra,
             ):
                 yield evt
@@ -165,6 +167,7 @@ async def iter_sse_chat(
     log_prefix: str,
     resume_pdf: bool | None = None,
     enable_web_search: bool = False,
+    attachments: list[dict] | None = None,
 ) -> AsyncIterator[bytes]:
     yield sse_bytes({"type": "meta", "conversation_id": conversation_id, "session_id": session_id})
 
@@ -184,6 +187,7 @@ async def iter_sse_chat(
             thread_id=thread_id,
             resume_pdf=resume_pdf,
             enable_web_search=enable_web_search,
+            attachments=attachments,
             memory=memory,
         ):
             events.append(item)

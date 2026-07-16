@@ -15,6 +15,7 @@ import {
   chatWithAgentStream,
   chatWithInterviewStream,
   type ChatStreamCallbacks,
+  type ChatAttachment,
 } from './chatStream';
 
 export type ChatApiClient = {
@@ -34,6 +35,7 @@ export type ChatApiClient = {
       signal?: AbortSignal;
       resumePdfExport?: boolean;
       enableWebSearch?: boolean;
+      attachments?: ChatAttachment[];
     }
   ) => Promise<void>;
 };

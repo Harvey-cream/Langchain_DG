@@ -116,6 +116,16 @@ export type PdfInterruptPayload = { kind: string; message: string };
 
 export type PdfReadyPayload = { url: string; filename: string };
 
+export type ChatAttachment = {
+  id: string;
+  name: string;
+  mime_type: string;
+  kind: 'image' | 'text' | 'pdf';
+  size: number;
+  data_url?: string;
+  text?: string;
+};
+
 export type ChatStreamCallbacks = {
   onMeta?: (data: StreamMeta) => void;
   onDelta?: (text: string) => void;
@@ -142,6 +152,7 @@ async function chatWithStreamAt(
     signal?: AbortSignal;
     resumePdfExport?: boolean;
     enableWebSearch?: boolean;
+    attachments?: ChatAttachment[];
   }
 ): Promise<void> {
   const token = localStorage.getItem('token');
@@ -177,6 +188,7 @@ async function chatWithStreamAt(
       message,
       conversation_id: conversationId,
       enable_web_search: Boolean(options?.enableWebSearch),
+      attachments: options?.attachments ?? [],
       ...(options?.resumePdfExport !== undefined
         ? { resume_pdf_export: options.resumePdfExport }
         : {}),
@@ -334,6 +346,7 @@ export async function chatWithAgentStream(
     signal?: AbortSignal;
     resumePdfExport?: boolean;
     enableWebSearch?: boolean;
+    attachments?: ChatAttachment[];
   }
 ): Promise<void> {
   return chatWithStreamAt(AGENT_STREAM_URL, message, conversationId, callbacks, options);
@@ -349,6 +362,7 @@ export async function chatWithInterviewStream(
     signal?: AbortSignal;
     resumePdfExport?: boolean;
     enableWebSearch?: boolean;
+    attachments?: ChatAttachment[];
   }
 ): Promise<void> {
   return chatWithStreamAt(INTERVIEW_STREAM_URL, message, conversationId, callbacks, options);
