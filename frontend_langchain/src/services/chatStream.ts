@@ -106,6 +106,13 @@ export function normalizeChatWhitespace(text: string): string {
 
 // --- SSE：idle 内无字节则中止（默认 3 分钟），不设固定总超时 ---
 const DEFAULT_IDLE_MS = 180000;
+/** 与 ChatPage 附件校验、nginx client_max_body_size 对齐 */
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_ATTACHMENT_MB = 5;
+/** nginx 20m：容纳最多 3 个 5MB 附件的 Base64 JSON */
+export const MAX_CHAT_STREAM_PAYLOAD_BYTES = 20 * 1024 * 1024;
+export const PAYLOAD_TOO_LARGE_MESSAGE =
+  '附件或消息过大，单个文件请不超过 5MB，并减少同时上传的附件数量';
 const AGENT_STREAM_URL = '/api/agent/chat/stream/';
 /** 面试大师独立库 */
 export const INTERVIEW_STREAM_URL = '/api/interview/chat/stream/';
@@ -125,6 +132,25 @@ export type ChatAttachment = {
   data_url?: string;
   text?: string;
 };
+
+export function estimateChatStreamPayloadBytes(
+  message: string,
+  conversationId: number | undefined,
+  attachments: ChatAttachment[],
+  options?: { enableWebSearch?: boolean; resumePdfExport?: boolean }
+): number {
+  return new Blob([
+    JSON.stringify({
+      message,
+      conversation_id: conversationId,
+      enable_web_search: Boolean(options?.enableWebSearch),
+      attachments,
+      ...(options?.resumePdfExport !== undefined
+        ? { resume_pdf_export: options.resumePdfExport }
+        : {}),
+    }),
+  ]).size;
+}
 
 export type ChatStreamCallbacks = {
   onMeta?: (data: StreamMeta) => void;
@@ -198,6 +224,9 @@ async function chatWithStreamAt(
 
   if (!res.ok) {
     if (idleTimer !== undefined) clearTimeout(idleTimer);
+    if (res.status === 413) {
+      throw new Error(PAYLOAD_TOO_LARGE_MESSAGE);
+    }
     let msg = `请求失败 ${res.status}`;
     try {
       const j = (await res.json()) as { msg?: string };

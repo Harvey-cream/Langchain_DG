@@ -9,7 +9,15 @@ import remarkBreaks from 'remark-breaks';
 import type { Components } from 'react-markdown';
 import { getUserInfo } from '../../services/api';
 import type { ChatApiClient } from '../../services/chatApi';
-import { formatAssistantDisplayText, type ChatAttachment } from '../../services/chatStream';
+import {
+  estimateChatStreamPayloadBytes,
+  formatAssistantDisplayText,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_MB,
+  MAX_CHAT_STREAM_PAYLOAD_BYTES,
+  PAYLOAD_TOO_LARGE_MESSAGE,
+  type ChatAttachment,
+} from '../../services/chatStream';
 import ChatSidebar, { ConversationItem } from './ChatSidebar';
 import './Chat.css';
 
@@ -153,7 +161,6 @@ const CHAT_MD_COMPONENTS: Components = {
 };
 const CHAT_REMARK_PLUGINS = [remarkGfm, remarkBreaks];
 const MAX_ATTACHMENT_COUNT = 3;
-const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024;
 const MAX_TEXT_ATTACHMENT_CHARS = 60000;
 
 function isTextFile(file: File): boolean {
@@ -179,7 +186,7 @@ function readAsDataUrl(file: File): Promise<string> {
 
 async function fileToAttachment(file: File): Promise<ChatAttachment | null> {
   if (file.size > MAX_ATTACHMENT_BYTES) {
-    message.warning(`${file.name} 超过 3MB，已跳过`);
+    message.warning(`${file.name} 超过 ${MAX_ATTACHMENT_MB}MB，已跳过`);
     return null;
   }
   const base = {
@@ -1132,6 +1139,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     const messageText = inputMessage.trim() || (attachmentsForSend.length ? '请理解这些附件。' : '');
     if (!messageText) return;
 
+    if (
+      estimateChatStreamPayloadBytes(messageText, conversationId, attachmentsForSend, {
+        enableWebSearch,
+      }) > MAX_CHAT_STREAM_PAYLOAD_BYTES
+    ) {
+      message.warning(PAYLOAD_TOO_LARGE_MESSAGE);
+      return;
+    }
+
     const startConversationId = conversationIdRef.current;
 
     userAbortRef.current = false;
@@ -1229,6 +1245,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       if (errorMessage.includes('认证失败') || errorMessage.includes('未登录')) {
         handleForceLogout('登录已失效，请重新登录');
         return;
+      }
+      if (errorMessage === PAYLOAD_TOO_LARGE_MESSAGE || errorMessage.includes('过大')) {
+        message.warning(errorMessage);
       }
 
       if (conversationIdRef.current !== startConversationId) {
@@ -1357,6 +1376,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
       if (errorMessage.includes('认证失败') || errorMessage.includes('未登录')) {
         handleForceLogout('登录已失效，请重新登录');
         return;
+      }
+      if (errorMessage === PAYLOAD_TOO_LARGE_MESSAGE || errorMessage.includes('过大')) {
+        message.warning(errorMessage);
       }
 
       if (conversationIdRef.current !== startConversationId) {
