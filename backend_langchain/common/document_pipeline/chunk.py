@@ -5,16 +5,23 @@ import re
 from pathlib import Path
 
 from langchain_chroma import Chroma
-from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from file_cleanup import clean_markdown_text, clean_pdf_text
+from common.document_pipeline.cleanup import (
+    clean_markdown_text,
+    clean_pdf_text,
+    clean_plain_text,
+    split_pdf_text_by_questions,
+)
+from common.document_pipeline.pdf import extract_pdf_pages
 from config.config import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
 
 _CHROMA_PAGE = 5000
 _H2 = re.compile(r"^##\s")
 _H3 = re.compile(r"^###\s")
+_MIN_CHUNK_CHARS = 80
+_PREAMBLE_MERGE_CHARS = 200
 
 
 def rag_metadata(*, corpus: str, domain: str, source_path: str) -> dict[str, str]:
@@ -115,9 +122,11 @@ def _markdown_sections(text: str, *, chunk_size: int) -> list[str]:
         subs = _split_by_header(block, _H3)
         if len(subs) > 1:
             parent = _parent_h2_line(block)
-            for sub in subs:
+            for i, sub in enumerate(subs):
                 if sub.startswith("###") and parent:
-                    sub = f"{parent}\n\n{sub}"
+                    prior = "\n\n".join(subs[:i])
+                    if parent.strip() not in prior:
+                        sub = f"{parent}\n\n{sub}"
                 out.append(sub)
         elif len(block) <= chunk_size:
             out.append(block)
@@ -154,6 +163,81 @@ def split_documents(
     return chunks
 
 
+def _is_small_chunk(text: str, *, min_chars: int) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return True
+    if len(t) < min_chars:
+        return True
+    first = (t.splitlines() or [""])[0]
+    if len(t) < _PREAMBLE_MERGE_CHARS and not _H2.match(first) and not first.startswith("###"):
+        return True
+    return False
+
+
+def merge_small_chunks(
+    chunks: list[Document],
+    *,
+    min_chars: int = _MIN_CHUNK_CHARS,
+) -> list[Document]:
+    """过短块并入相邻块，减少孤儿 chunk。"""
+    if not chunks:
+        return []
+    merged: list[Document] = []
+    carry: Document | None = None
+
+    for ch in chunks:
+        text = (ch.page_content or "").strip()
+        if not text:
+            continue
+        if carry is None:
+            carry = ch
+            continue
+        if _is_small_chunk(carry.page_content or "", min_chars=min_chars):
+            carry = Document(
+                page_content=f"{carry.page_content}\n\n{text}".strip(),
+                metadata=dict(carry.metadata or {}),
+            )
+        else:
+            merged.append(carry)
+            carry = ch
+
+    if carry is not None:
+        if merged and _is_small_chunk(carry.page_content or "", min_chars=min_chars):
+            prev = merged[-1]
+            merged[-1] = Document(
+                page_content=f"{prev.page_content}\n\n{carry.page_content}".strip(),
+                metadata=dict(prev.metadata or {}),
+            )
+        else:
+            merged.append(carry)
+    return merged
+
+
+def split_pdf_documents(
+    docs: list[Document],
+    *,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+) -> list[Document]:
+    """PDF：先按问句行切，再对过长块做字符切分。"""
+    if not docs:
+        return []
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    chunks: list[Document] = []
+    for doc in docs:
+        meta = dict(doc.metadata or {})
+        for section in split_pdf_text_by_questions(doc.page_content or ""):
+            if len(section) <= chunk_size:
+                chunks.append(Document(page_content=section, metadata=meta))
+            else:
+                chunks.extend(
+                    splitter.split_documents([Document(page_content=section, metadata=meta)])
+                )
+    chunks = [c for c in chunks if (c.page_content or "").strip()]
+    return merge_small_chunks(chunks)
+
+
 def load_markdown_documents(
     paths: list[Path],
     knowledge_root: Path,
@@ -186,14 +270,41 @@ def load_pdf_documents(
     domain: str,
 ) -> list[Document]:
     sp = pdf_path.relative_to(knowledge_root).as_posix()
-    out: list[Document] = []
-    for page in PyPDFLoader(str(pdf_path)).load():
-        text = clean_pdf_text(page.page_content or "")
+    parts: list[str] = []
+    for _page_num, raw in extract_pdf_pages(pdf_path):
+        text = clean_pdf_text(raw)
         if text:
-            out.append(
-                Document(page_content=text, metadata=rag_metadata(corpus=corpus, domain=domain, source_path=sp))
-            )
-    return out
+            parts.append(text)
+    if not parts:
+        return []
+    return [
+        Document(
+            page_content="\n\n".join(parts),
+            metadata=rag_metadata(corpus=corpus, domain=domain, source_path=sp),
+        )
+    ]
+
+
+def load_plain_text_documents(
+    path: Path,
+    knowledge_root: Path,
+    *,
+    corpus: str,
+    domain: str,
+) -> list[Document]:
+    try:
+        sp = path.resolve().relative_to(knowledge_root.resolve()).as_posix()
+    except ValueError:
+        sp = path.name
+    body = clean_plain_text(path.read_text(encoding="utf-8", errors="replace"))
+    if not body:
+        return []
+    return [
+        Document(
+            page_content=body,
+            metadata=rag_metadata(corpus=corpus, domain=domain, source_path=sp),
+        )
+    ]
 
 
 def agent_markdown_chunks(
@@ -212,14 +323,16 @@ def agent_markdown_chunks(
         paths = [p for p in paths if p.relative_to(knowledge_root).as_posix() not in skip_sources]
     if not paths:
         return []
-    return split_documents(
+    chunks = split_documents(
         load_markdown_documents(
             paths, knowledge_root, corpus=corpus, domain=domain, strip_images=strip_images
         ),
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         markdown_aware=True,
+        drop_empty=True,
     )
+    return merge_small_chunks(chunks)
 
 
 def interview_pdf_chunks(
@@ -234,7 +347,7 @@ def interview_pdf_chunks(
     raw = load_pdf_documents(pdf_path, knowledge_root, corpus=corpus, domain=domain)
     if not raw:
         raise RuntimeError(f"无可用文本：{pdf_path.name}")
-    chunks = split_documents(raw, chunk_size=chunk_size, chunk_overlap=chunk_overlap, drop_empty=True)
+    chunks = split_pdf_documents(raw, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     if not chunks:
         raise RuntimeError(f"切分后无有效块：{pdf_path.name}")
     return chunks

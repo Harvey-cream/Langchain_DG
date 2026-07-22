@@ -12,15 +12,15 @@ from config.config import QUERY_REWRITE_MAX_QUESTIONS, get_qwen_chat_model
 
 logger = logging.getLogger(__name__)
 
-_REWRITE_SYSTEM = """你是「检索问句改写器」。根据最近对话与本轮用户消息，产出用于知识库向量检索的中文问句。
+_REWRITE_SYSTEM = """你是「检索问句改写器」。根据最近对话与本轮用户消息，产出用于向量检索的中文问句。
 你不回答问题。
 
 规则：
 1) 输出 1～4 条 search_questions；只问一件事时 1 条即可，复合问题可拆成多条
-2) 每条必须是完整问句（是什么/如何/区别/怎么答等），不要写成答案
-3) 结合上文补全指代（「这个」「它」要落到具体主题）
+2) 每条必须是完整问句（是什么/如何/区别/怎么规定/文档里有没有等），不要写成答案
+3) 结合上文补全指代（「这个」「它」「那份文件」要落到具体主题或文档名）
 4) 每条简洁（建议 15～60 字），不要重复语义
-5) 保留专有名词（OpenClaw、LangGraph、Redis、Vue 等）"""
+5) 保留专有名词、制度名、产品名、文档标题等关键实体"""
 
 
 class RewriteOutput(BaseModel):
@@ -71,7 +71,7 @@ async def rewrite_search_queries(
         return [text]
 
     skill = (skill_name or "").strip() or "（未匹配）"
-    mode_label = "面试大师" if mode == "interview" else "主对话"
+    mode_label = "面试大师" if mode == "interview" else "企业知识库AI助手"
     parts = [f"模式：{mode_label}", f"当前 Skill：{skill}"]
     if (recent_dialogue or "").strip():
         parts.append(f"【最近对话】\n{recent_dialogue.strip()}")

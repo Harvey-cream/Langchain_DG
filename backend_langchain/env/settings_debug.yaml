@@ -36,9 +36,9 @@ dashscope:
 
 rag:
   collection: knowledge
-  recall_k: 40
+  user_collection: user_knowledge
+  recall_k: 20
   rerank_top_k: 5
-  max_distance: 0.65
   query_rewrite_enabled: true
   query_rewrite_max_questions: 4
   query_rewrite_context_turns: 2
@@ -48,3 +48,13 @@ rag:
   chunk_overlap: 80
   hf_embedding_model: BAAI/bge-large-zh-v1.5
   hf_embedding_batch_size: 32
+
+oss:
+  access_key_id: "${OSS_ACCESS_KEY_ID:-}"
+  access_key_secret: "${OSS_ACCESS_KEY_SECRET:-}"
+  bucket_name: "${OSS_BUCKET_NAME:-my-oss-bucket-2026-2026}"
+  endpoint: "${OSS_ENDPOINT:-oss-cn-shenzhen.aliyuncs.com}"
+  prefix: "${OSS_PREFIX:-agent-kb}"
+  url_prefix: "${OSS_URL_PREFIX:-}"
+  max_file_bytes: 20971520
+  upload_url_expires: 1800

@@ -28,9 +28,9 @@ KNOWLEDGE_DIR_NAME = "Langchain_knowledge"
 
 _rag = rag_config()
 COLLECTION = _rag["collection"]
+USER_COLLECTION = _rag.get("user_collection") or "user_knowledge"
 RECALL_K = _rag["recall_k"]
 RERANK_TOP_K = _rag["rerank_top_k"]
-RAG_MAX_DISTANCE = _rag["max_distance"]
 QUERY_REWRITE_MAX_QUESTIONS = _rag["query_rewrite_max_questions"]
 QUERY_REWRITE_CONTEXT_TURNS = _rag["query_rewrite_context_turns"]
 DOCS_AGENT = _rag["docs_agent"]
@@ -42,6 +42,7 @@ HF_EMBEDDING_BATCH_SIZE = _rag["hf_embedding_batch_size"]
 
 CORPUS_AGENT = "agent"
 CORPUS_INTERVIEW = "interview"
+CORPUS_USER = "user"
 
 DOMAIN_LABELS: dict[str, str] = {
     "ai_programming": "AI 编程",
@@ -62,6 +63,11 @@ def chroma_path() -> Path:
     return knowledge_root() / "chroma" / COLLECTION
 
 
+def user_chroma_path() -> Path:
+    """用户上传文档专用向量库目录（与内置 knowledge 隔离）。"""
+    return knowledge_root() / "chroma" / USER_COLLECTION
+
+
 def list_domains(corpus: str) -> frozenset[str]:
     root = knowledge_root()
     if corpus == CORPUS_AGENT:
@@ -79,6 +85,7 @@ def get_domains() -> dict[str, frozenset[str]]:
     return {
         CORPUS_AGENT: list_domains(CORPUS_AGENT),
         CORPUS_INTERVIEW: list_domains(CORPUS_INTERVIEW),
+        CORPUS_USER: frozenset({"uploads"}),
     }
 
 

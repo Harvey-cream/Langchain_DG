@@ -16,8 +16,10 @@ PDF_EXPORT_INTERRUPT_KIND = "pdf_export_confirm"
 PDF_READY_MARKER = "__PDF_READY__"
 
 PDF_EXPORT_TOOL_MSG_CONFIRM = (
-    "[系统] 用户已确认生成 PDF。请结合对话与用户指定范围完成润色后，调用工具 finalize_pdf_export 一次"
-    "（title=文档标题，body_markdown=完整 Markdown 成稿）；勿再次调用 confirm_pdf_export。"
+    "[系统] 用户已确认生成 PDF。请尽快调用 finalize_pdf_export 一次："
+    "title=文档标题；body_markdown=完整 Markdown 成稿。"
+    "优先整理对话中已有内容为结构清晰的 Markdown，保持信息完整与可读，勿无故大幅扩写；"
+    "勿再次调用 confirm_pdf_export。"
 )
 PDF_EXPORT_TOOL_MSG_CANCEL = (
     "[系统] 用户已取消 PDF 导出，请仅用自然语言友好回复，勿生成 PDF 或下载链接。"
@@ -131,10 +133,15 @@ async def finalize_pdf_export(title: str, body_markdown: str) -> str:
     except Exception as e:
         log_exception_event(logger, "finalize_pdf_export_failed", error=str(e))
         hint = str(e).strip()
-        if "缺少依赖" in hint or "markdown" in hint.lower():
+        if "缺少依赖" in hint or "fpdf" in hint.lower():
             return _system_tool_output(
-                "[系统] PDF 生成失败：后端未安装 markdown/xhtml2pdf，或 pip 装在了别的 Python 环境。"
-                "请对**运行后端的同一 Python 解释器**执行 pip install markdown xhtml2pdf 后重试。"
+                "[系统] PDF 生成失败：后端未安装 fpdf2，或 pip 装在了别的 Python 环境。"
+                "请对**运行后端的同一 Python 解释器**执行 pip install fpdf2 后重试。"
+            )
+        if "中文字体" in hint or "PDF_EXPORT_FONT" in hint:
+            return _system_tool_output(
+                "[系统] PDF 生成失败：未找到可用中文字体。"
+                "请设置 PDF_EXPORT_FONT 为 .ttf 路径（Windows 示例：C:\\\\Windows\\\\Fonts\\\\simhei.ttf）后重试。"
             )
         return _system_tool_output(
             "[系统] PDF 生成失败，请用自然语言向用户致歉并建议稍后重试，勿伪造下载链接。"

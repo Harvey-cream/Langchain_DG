@@ -161,9 +161,9 @@ def rag_config() -> dict[str, Any]:
         rewrite_enabled = True
     return {
         "collection": str(rag.get("collection") or "knowledge").strip() or "knowledge",
-        "recall_k": int(rag.get("recall_k") or 40),
+        "user_collection": str(rag.get("user_collection") or "user_knowledge").strip() or "user_knowledge",
+        "recall_k": int(rag.get("recall_k") or 20),
         "rerank_top_k": int(rag.get("rerank_top_k") or 5),
-        "max_distance": float(rag.get("max_distance") if rag.get("max_distance") is not None else 0.65),
         "query_rewrite_enabled": bool(rewrite_enabled),
         "query_rewrite_max_questions": int(rag.get("query_rewrite_max_questions") or 4),
         "query_rewrite_context_turns": int(rag.get("query_rewrite_context_turns") or 2),
@@ -185,6 +185,33 @@ def redis_url() -> str:
         db = redis_cfg.get("db") if redis_cfg.get("db") is not None else 0
         return f"redis://{auth}{redis_cfg['host']}:{port}/{db}"
     return os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
+
+
+def oss_config() -> dict[str, Any]:
+    oss = _section("oss")
+    bucket = str(oss.get("bucket_name") or "").strip()
+    endpoint = str(oss.get("endpoint") or "").strip()
+    url_prefix = str(oss.get("url_prefix") or "").strip()
+    if not url_prefix and bucket and endpoint:
+        url_prefix = f"https://{bucket}.{endpoint}"
+    try:
+        max_bytes = int(oss.get("max_file_bytes") or 20 * 1024 * 1024)
+    except (TypeError, ValueError):
+        max_bytes = 20 * 1024 * 1024
+    try:
+        expires = int(oss.get("upload_url_expires") or 1800)
+    except (TypeError, ValueError):
+        expires = 1800
+    return {
+        "access_key_id": str(oss.get("access_key_id") or "").strip(),
+        "access_key_secret": str(oss.get("access_key_secret") or "").strip(),
+        "bucket_name": bucket,
+        "endpoint": endpoint,
+        "prefix": str(oss.get("prefix") or "agent-kb").strip().strip("/") or "agent-kb",
+        "url_prefix": url_prefix.rstrip("/"),
+        "max_file_bytes": max(1, max_bytes),
+        "upload_url_expires": max(60, expires),
+    }
 
 
 # --- MySQL（yaml 已含 ${MYSQL_PASSWORD} 等插值）---

@@ -1,4 +1,4 @@
-"""超级智能体 API：/api/agent/*"""
+"""企业知识库AI助手 API：/api/agent/*"""
 from __future__ import annotations
 
 import logging

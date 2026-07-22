@@ -28,7 +28,7 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-from chunk import agent_markdown_chunks, existing_source_paths, interview_pdf_chunks
+from common.document_pipeline import agent_markdown_chunks, existing_source_paths, interview_pdf_chunks
 from common.embedding import get_rag_embedding_model
 from config.config import (
     COLLECTION,

@@ -365,7 +365,7 @@ async function chatWithStreamAt(
   }
 }
 
-/** 超级智能体：/api/agent/chat/stream/ */
+/** 企业知识库AI助手：/api/agent/chat/stream/ */
 export async function chatWithAgentStream(
   message: string,
   conversationId: number | undefined,

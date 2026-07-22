@@ -15,7 +15,7 @@ export const login = (params: LoginRequest) => sendReleaseRequest("/api/user/log
 // 不适合消费 text/event-stream；路径见 chatStream（/api/agent/chat/stream/、/api/interview/chat/stream/）。
 //
 
-// --- 超级智能体（/api/agent/，表 user_conversations / user_sessions）---
+// --- 企业知识库AI助手（/api/agent/，表 user_conversations / user_sessions）---
 
 // 获取会话列表
 export const getConversations = () => sendRequest("/api/agent/chat/", 'GET');
@@ -39,6 +39,74 @@ export const patchConversation = (params: {
 /** 删除会话（级联删除该会话下消息） */
 export const deleteConversation = (conversationId: number) =>
   sendRequest('/api/agent/conversation/', 'DELETE', { conversation_id: conversationId });
+
+// --- 知识库助手文档（OSS 直传）---
+
+export type AgentDocumentItem = {
+  id: number;
+  filename: string;
+  format: string;
+  status: string;
+  chunk_count: number;
+  size_bytes: number;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export const listAgentDocuments = () => sendRequest('/api/agent/documents', 'GET');
+
+export const initAgentDocumentUpload = (params: {
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+}) => sendRequest('/api/agent/documents/upload-init', 'POST', params);
+
+export const confirmAgentDocumentUpload = (documentId: number) =>
+  sendRequest(`/api/agent/documents/${documentId}/confirm`, 'POST');
+
+export const deleteAgentDocument = (documentId: number) =>
+  sendRequest(`/api/agent/documents/${documentId}`, 'DELETE');
+
+/** 选文件 → 预签名直传 OSS → confirm 触发入库 */
+export async function uploadAgentDocumentFile(file: File): Promise<AgentDocumentItem> {
+  const initRes = await initAgentDocumentUpload({
+    filename: file.name,
+    content_type: file.type || 'application/octet-stream',
+    size_bytes: file.size,
+  });
+  if (!initRes?.success || !initRes.data?.upload_url) {
+    throw new Error(initRes?.msg || '获取上传凭证失败');
+  }
+  const { document_id, upload_url, content_type } = initRes.data as {
+    document_id: number;
+    upload_url: string;
+    content_type: string;
+  };
+  try {
+    const putRes = await fetch(upload_url, {
+      method: 'PUT',
+      body: file,
+      headers: { 'Content-Type': content_type || file.type || 'application/octet-stream' },
+    });
+    if (!putRes.ok) {
+      throw new Error(`OSS 上传失败 (${putRes.status})`);
+    }
+    const confirmRes = await confirmAgentDocumentUpload(document_id);
+    if (!confirmRes?.success) {
+      throw new Error(confirmRes?.msg || '确认入库失败');
+    }
+    return confirmRes.data as AgentDocumentItem;
+  } catch (err) {
+    // upload-init 已建库：失败时删掉，避免留下「等待中」脏记录
+    try {
+      await deleteAgentDocument(document_id);
+    } catch {
+      /* ignore cleanup error */
+    }
+    throw err;
+  }
+}
 
 // --- AI 面试大师（/api/interview/，表 interview_conversations / interview_sessions）---
 

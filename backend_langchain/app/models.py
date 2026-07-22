@@ -121,6 +121,29 @@ class UserProfile(Base):
     )
 
 
+class AgentDocument(Base):
+    """知识库助手侧栏上传的文档（原件在 OSS）。"""
+
+    __tablename__ = "agent_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), index=True)
+    filename: Mapped[str] = mapped_column(String(512))
+    format: Mapped[str] = mapped_column(String(32), default="text")
+    oss_key: Mapped[str] = mapped_column(String(1024), default="")
+    content_type: Mapped[str] = mapped_column(String(128), default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), server_default=func.now(), onupdate=func.now()
+    )
+
+
 async def ensure_display_tag(session, user: User) -> str:
     if user.display_tag:
         return user.display_tag

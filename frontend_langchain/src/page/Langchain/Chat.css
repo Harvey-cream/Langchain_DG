@@ -92,6 +92,95 @@
   cursor: pointer;
 }
 
+.chat-sidebar-docs-entry {
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: transparent;
+  color: #cbd5e1;
+  height: 34px;
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.chat-sidebar-docs-entry:hover {
+  color: #e2e8f0;
+  border-color: #60a5fa;
+  background: rgba(96, 165, 250, 0.08);
+}
+
+.chat-docs-modal-hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.chat-docs-modal-list {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.chat-docs-modal-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.chat-docs-modal-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.chat-docs-modal-row.status-ready {
+  border-color: #a7f3d0;
+  background: #ecfdf5;
+}
+
+.chat-docs-modal-row.status-processing,
+.chat-docs-modal-row.status-pending {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.chat-docs-modal-row.status-failed {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.chat-docs-modal-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-docs-modal-name {
+  font-size: 14px;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-docs-modal-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
 .chat-sidebar-list {
   flex: 1;
   min-height: 0;

@@ -6,7 +6,7 @@ import { agentChatApi, interviewChatApi } from '../../services/chatApi';
 const WELCOME_AGENT: Message = {
   id: 'welcome',
   content:
-    '你好，我是AI超级智能体。我可以解答各类问题，提供专业建议，请问有什么可以帮助你的吗？',
+    '你好，我是企业知识库AI助手。你可以在侧栏「我的文档」上传材料，我再基于这些文档帮你检索问答、摘要与整理。想先上传一份，还是直接提问？',
   isUser: false,
   timestamp: new Date().toLocaleTimeString(),
 };
@@ -35,9 +35,10 @@ const Chat: React.FC = () => {
 
   return (
     <ChatPage
-      featureTitle="AI超级智能体"
+      featureTitle="企业知识库AI助手"
       welcomeMessage={WELCOME_AGENT}
       chatApi={agentChatApi}
+      enableDocuments
     />
   );
 };

@@ -98,16 +98,16 @@ def _quick_greeting_hit(message: str) -> str | None:
 
 
 def quick_agent_greeting_prompt(message: str) -> str | None:
-    """AI 编程助手：问候/短句快速路径提示词（不走 ReAct）。"""
+    """企业知识库AI助手：问候/短句快速路径提示词（不走 ReAct）。"""
     hit = _quick_greeting_hit(message)
     if not hit:
         return None
     return (
-        "你是温暖、专业的 AI 助手。用户刚发来一条问候，请直接自然回复。\n"
+        "你是「企业知识库AI助手」。用户刚发来一条问候，请直接自然回复。\n"
         "要求：\n"
         "1) 先简短接住问候（1 句）；\n"
-        "2) 再用 1-2 句告诉用户你能做什么（重点：代码报错排查、代码改造、性能优化、方案对比、技术问答）；\n"
-        "3) 末尾给一个自然的引导句，鼓励用户直接贴问题/代码/报错；\n"
+        "2) 再用 1-2 句说明你能做什么（上传文档后的检索问答、摘要、制度/资料速查）；\n"
+        "3) 末尾给一个自然引导，鼓励用户上传文档或直接问文档相关问题；\n"
         "4) 不要使用 ReAct 结构，不要输出 Thought/Action/Observation/Final Answer；\n"
         "5) 每次表达尽量有变化，口语化，控制在 80 字以内。\n\n"
         f"用户消息：{hit}"

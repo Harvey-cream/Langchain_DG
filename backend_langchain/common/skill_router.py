@@ -24,38 +24,47 @@ class SkillSpec:
     anti_prototypes: tuple[str, ...] = ()
 
 
-AGENT_SKILLS: tuple[SkillSpec, ...] = (
-    SkillSpec(
-        name="coding_coach",
-        when="报错排查、代码改造、方案对比、性能/可维护性优化",
-        output_schema="问题定位 -> 最小修复 -> 原理解释 -> 验证步骤",
-        prototypes=(
-            "用户贴出报错堆栈，需要定位 bug 并给出最小可行修复。",
-            "用户要求重构代码、比较实现方案、做性能与可维护性优化。",
-            "用户提供代码片段，希望修改实现并给出验证步骤。",
-        ),
-        anti_prototypes=(
-            "用户在问概念定义，例如某工具是什么、原理是什么。",
-        ),
+# 企业知识库线 Skill：
+# - doc_summary：文档摘要 Agent 主 Skill
+# - knowledge_qa / document_export / repo_inspector：知识问答 Agent（后两者暂挂同图）
+# compliance_lookup（合规速查）后续再拆
+DOC_SUMMARY_SKILL = SkillSpec(
+    name="doc_summary",
+    when="对用户已上传并入库的文档做摘要、导读、要点提炼或概括全文结构",
+    output_schema="文档定位（可带文档名）-> 核心要点 -> 分段/主题导读 -> 适用场景或注意点",
+    prototypes=(
+        "用户希望对已入库材料做摘要、导读、要点提炼。",
+        "用户问「我上传的某某文件内容是什么」「总结一下那份文档」。",
+        "用户说帮我概括/总结/提炼某份制度、笔记、周报或日志的主要内容。",
+        "用户要一份上传文档的导读或内容概览，而不是追问某个具体条款。",
+        "用户说总结一下我上传的实习日志、周报或那份材料。",
+        "用户要对整份文档做内容摘要，而不是查找某一条规定。",
     ),
-    SkillSpec(
-        name="learning_planner",
-        when="学习路线、周计划、项目驱动学习、阶段目标拆解",
-        output_schema="目标拆分 -> 周任务 -> 里程碑 -> 复盘",
-        prototypes=(
-            "用户希望制定学习路线图，按阶段拆分目标与任务。",
-            "用户希望得到周计划、里程碑和复盘节奏。",
-        ),
+    anti_prototypes=(
+        "用户询问某项制度/政策的具体规定、怎么办理、有没有某一条款。",
+        "用户要对比两份材料差异或查找出处、定位某一句原文。",
+        "用户说帮我找一下某份文件在不在，而不是做摘要。",
+        "用户明确要求导出 PDF、生成可下载正式文档（走 document_export）。",
+        "用户贴了 GitHub/Gitee 仓库链接并要求解析仓库（走 repo_inspector）。",
     ),
+)
+
+KNOWLEDGE_QA_SKILLS: tuple[SkillSpec, ...] = (
     SkillSpec(
         name="knowledge_qa",
-        when="基于项目知识库的知识问答（教程/面试沉淀主题）",
-        output_schema="问题澄清 -> 命中知识点 -> 答案总结 -> 延伸建议",
+        when="基于用户上传文档：问答、查找文件/材料、对比与找出处（制度、规范、笔记、日志等）",
+        output_schema="问题澄清 -> 命中文档要点（可带文档名）-> 答案 -> 延伸建议",
         prototypes=(
-            "用户在问某个概念是什么、怎么理解、原理是什么。",
-            "用户询问 OpenClaw、Vibe Coding、RAG、Agent 等教程/知识库条目。",
-            "用户询问 MCP（Model Context Protocol）是什么、做什么、和其他方案有什么区别。",
-            "用户希望解释术语、做知识点对比与归纳总结。",
+            "用户询问上传文档里某项制度/政策/规范怎么规定。",
+            "用户要基于知识库做问答、对比两份材料或找出处。",
+            "用户说「我的文档里有没有某某条款」「按上传的说明回答」「帮我查一下资料」。",
+            "用户说找一下我上传的某份文件里关于某主题的具体说明。",
+        ),
+        anti_prototypes=(
+            "用户明确要求对整份文档做摘要、导读、总结或要点提炼（走 doc_summary）。",
+            "用户说总结一下/概括一下/导读一下某份上传文档。",
+            "用户明确要求导出 PDF、生成可下载正式文档（走 document_export）。",
+            "用户贴了 GitHub/Gitee 仓库链接并要求解析仓库（走 repo_inspector）。",
         ),
     ),
     SkillSpec(
@@ -67,29 +76,32 @@ AGENT_SKILLS: tuple[SkillSpec, ...] = (
             "用户给出 owner/repo 等仓库坐标，要求分析该开源仓库的结构与关键指标。",
         ),
         anti_prototypes=(
-            "用户只是在问概念定义，例如 MCP 是什么、原理是什么、和谁的区别是什么。",
+            "用户只是在问概念定义，例如某协议是什么、原理是什么。",
             "用户没有提供任何 GitHub/Gitee 仓库链接或仓库坐标。",
+            "用户在查自己上传的文档、实习日志或知识库内容。",
         ),
     ),
     SkillSpec(
         name="document_export",
-        when="用户明确要导出 PDF、生成可下载文档、打印/保存排版材料；含把对话、笔记、代码/源码/项目说明整理成 PDF 交付",
-        output_schema="人机协同：必须先调用 confirm_pdf_export 一次；用户确认后结合上下文润色，再调用 finalize_pdf_export 一次（title + body_markdown）生成可下载 PDF；确认前勿声称已生成文件",
+        when="用户明确要导出 PDF、生成可下载文档或打印/保存排版材料",
+        output_schema="人机协同：先 confirm_pdf_export；确认后尽快 finalize_pdf_export（title + 完整 Markdown）；整理已有内容保质，勿无故扩写；确认前勿声称已生成文件",
         prototypes=(
             "用户要求把当前对话或某段内容导出成 PDF。",
-            "用户希望生成可下载的 PDF、打印版学习路线或排版好的材料。",
+            "用户希望生成可下载的 PDF、打印版材料。",
             "用户说整理成文档、做成 PDF、导出发我、给我正式版/打印版。",
-            "用户要把总结、路线图、笔记输出为 PDF 或 Word 式交付物（以 PDF 为统一出口时可等同处理）。",
-            "用户要把代码、源码、刚写的程序、项目说明或 README 整理成 PDF 或导出为 PDF。",
-            "用户说把这段代码打成 PDF、代码导出 PDF、打印代码、代码片段生成文档版。",
-            "用户要求把仓库里的代码、解决方案、实现步骤导出成可打印的 PDF 材料。",
+            "用户要把知识库问答结论、摘要、笔记输出为 PDF 交付物。",
         ),
         anti_prototypes=(
             "用户只是在问 PDF 是什么、格式原理、和其它格式的区别，不要求导出文件。",
-            "用户只要改 bug、写实现或调试，全文未提及导出、PDF、下载、打印、文档交付。",
+            "用户只是查找或摘要上传文档，未提及导出、PDF、下载、打印。",
         ),
     ),
 )
+
+DOC_SUMMARY_SKILLS: tuple[SkillSpec, ...] = (DOC_SUMMARY_SKILL,)
+
+# 线内 Skill catalog（子图 skill_recall 用；线级分诊见 supervisor_knowledge LLM）
+AGENT_SKILLS: tuple[SkillSpec, ...] = (DOC_SUMMARY_SKILL, *KNOWLEDGE_QA_SKILLS)
 
 
 INTERVIEW_SKILLS: tuple[SkillSpec, ...] = (
@@ -123,7 +135,7 @@ INTERVIEW_SKILLS: tuple[SkillSpec, ...] = (
     SkillSpec(
         name="document_export",
         when="用户要把面试准备内容导出为 PDF；含代码题解答、手写代码、算法步骤整理成 PDF",
-        output_schema="人机协同：先 confirm_pdf_export；用户确认后润色全文再 finalize_pdf_export；确认前勿声称已生成文件",
+        output_schema="人机协同：先 confirm_pdf_export；确认后尽快 finalize_pdf_export；整理已有内容保质，勿无故扩写；确认前勿声称已生成文件",
         prototypes=(
             "用户希望把面试题总结、错题本或准备清单导出成 PDF。",
             "用户要下载打印版面试材料、PDF 版复习大纲。",
@@ -231,7 +243,7 @@ def _skill_match_score(query_vec: list[float], spec: SkillSpec) -> float:
         return best_proto
     anti_scores = [_cosine(query_vec, _embed_phrase_cached(p)) for p in spec.anti_prototypes]
     best_anti = max(anti_scores) if anti_scores else 0.0
-    # 反向惩罚：降低错误路由（例如“什么是X”误进 coding_coach）。
+    # 反向惩罚：降低错误路由（例如文档问答误进 repo_inspector）。
     return best_proto - 0.25 * best_anti
 
 
@@ -301,16 +313,21 @@ async def prepare_turn_context(
     mode: RecallMode,
     recent_dialogue: str = "",
     on_search: Callable[[], None] | None = None,
+    user_id: int | None = None,
+    skills: tuple[SkillSpec, ...] | None = None,
 ) -> tuple[SkillSpec | None, str, str]:
     """Skill 向量路由 → RAG 门控 → 问句改写 → 粗召回 + 精排检索。"""
     from common.query_rewrite import rewrite_search_queries
     from common.rag import retrieve_context
     from common.rag_gate import decide_rag_gate
-    from config.config import CORPUS_AGENT, CORPUS_INTERVIEW
+    from config.config import CORPUS_INTERVIEW, CORPUS_USER
 
     text = (user_input or "").strip()
-    skills = AGENT_SKILLS if mode == "main" else INTERVIEW_SKILLS
-    spec = _pick_skill(text, skills) if text else None
+    catalog = skills if skills is not None else (AGENT_SKILLS if mode == "main" else INTERVIEW_SKILLS)
+    spec = _pick_skill(text, catalog) if text else None
+    # 单 Skill 子图（如文档摘要）：低置信时仍落到该图主 Skill，避免空 skill_context
+    if spec is None and len(catalog) == 1:
+        spec = catalog[0]
     skill_context = _render_skill_context(spec)
     skill_name = spec.name if spec else None
 
@@ -326,8 +343,16 @@ async def prepare_turn_context(
                 skill_name=skill_name,
                 recent_dialogue=recent_dialogue,
             )
-            corpus = CORPUS_INTERVIEW if mode == "interview" else CORPUS_AGENT
-            retrieved = retrieve_context(questions, corpus=corpus)
+            if mode == "interview":
+                # 面试线：内置 knowledge（docs2）
+                retrieved = retrieve_context(questions, corpus=CORPUS_INTERVIEW)
+            else:
+                # 企业知识库AI助手：只检索用户上传库 user_knowledge
+                retrieved = retrieve_context(
+                    questions,
+                    corpus=CORPUS_USER,
+                    user_id=user_id,
+                )
     return spec, skill_context, retrieved
 
 

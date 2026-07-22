@@ -32,12 +32,15 @@ export interface Message {
 export type ChatPageProps = {
   featureTitle: string;
   welcomeMessage: Message;
-  /** 会话与流式接口：超级智能体与面试大师分别使用不同后端路径与数据表 */
+  /** 会话与流式接口：知识库助手与面试大师分别使用不同后端路径与数据表 */
   chatApi: ChatApiClient;
+  /** 知识库助手侧栏文档区 */
+  enableDocuments?: boolean;
 };
 
 type ChatViewProps = {
   featureTitle: string;
+  enableDocuments?: boolean;
   userDisplayTag: string | null;
   conversations: ConversationItem[];
   activeConversationId?: number;
@@ -242,6 +245,7 @@ const AssistantBubbleContent = React.memo(function AssistantBubbleContent({
 
 const ChatView: React.FC<ChatViewProps> = ({
   featureTitle,
+  enableDocuments = false,
   userDisplayTag,
   conversations,
   activeConversationId,
@@ -279,6 +283,7 @@ const ChatView: React.FC<ChatViewProps> = ({
     <div className="chat-layout">
       <ChatSidebar
         featureTitle={featureTitle}
+        enableDocuments={enableDocuments}
         userDisplayTag={userDisplayTag}
         conversations={conversations}
         activeConversationId={activeConversationId}
@@ -491,7 +496,12 @@ const ChatView: React.FC<ChatViewProps> = ({
   );
 };
 
-const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatApi }) => {
+const ChatPage: React.FC<ChatPageProps> = ({
+  featureTitle,
+  welcomeMessage,
+  chatApi,
+  enableDocuments = false,
+}) => {
   const [messages, setMessages] = useState<Message[]>(() => [welcomeMessage]);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -698,14 +708,18 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     }
 
     void (async () => {
-      const items = await loadConversations();
-      const raw = localStorage.getItem(activeConversationStorageKey);
-      const restoredId = raw ? Number(raw) : NaN;
-      const canRestore = Number.isInteger(restoredId) && items.some(c => c.id === restoredId);
-      if (canRestore) {
-        await handleSelectConversation(restoredId);
-      } else {
-        persistActiveConversationId(undefined);
+      try {
+        const items = await loadConversations();
+        const raw = localStorage.getItem(activeConversationStorageKey);
+        const restoredId = raw ? Number(raw) : NaN;
+        const canRestore = Number.isInteger(restoredId) && items.some(c => c.id === restoredId);
+        if (canRestore) {
+          await handleSelectConversation(restoredId);
+        } else {
+          persistActiveConversationId(undefined);
+        }
+      } catch {
+        message.error('加载会话列表失败，请确认后端已启动后刷新页面');
       }
 
       try {
@@ -1429,6 +1443,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatA
     <div className="chat-page-shell">
       <ChatView
         featureTitle={featureTitle}
+        enableDocuments={enableDocuments}
         userDisplayTag={userDisplayTag}
         conversations={conversations}
         activeConversationId={conversationId}

@@ -1,4 +1,4 @@
-"""统一 Chroma RAG：单 collection，corpus + domain metadata 隔离。"""
+"""Chroma RAG：内置库 knowledge + 用户上传库 user_knowledge 分离。"""
 from __future__ import annotations
 
 import os
@@ -14,29 +14,23 @@ from config.config import (
     COLLECTION,
     CORPUS_AGENT,
     CORPUS_INTERVIEW,
-    RAG_MAX_DISTANCE,
+    CORPUS_USER,
     RECALL_K,
+    USER_COLLECTION,
     chroma_path,
     get_domains,
+    user_chroma_path,
 )
 
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
 _store: Chroma | None = None
+_user_store: Chroma | None = None
 _store_lock = threading.Lock()
+_user_store_lock = threading.Lock()
 _embeddings: Embeddings | None = None
 
 _NO_HITS_MSG = "未检索到足够相关的知识片段。"
-
-
-def _rag_max_distance() -> float:
-    raw = os.getenv("RAG_MAX_DISTANCE", "").strip()
-    if raw:
-        try:
-            return max(0.0, float(raw))
-        except ValueError:
-            pass
-    return RAG_MAX_DISTANCE
 
 
 def _get_embeddings() -> Embeddings:
@@ -47,6 +41,7 @@ def _get_embeddings() -> Embeddings:
 
 
 def get_store() -> Chroma | None:
+    """内置知识库（docs1/docs2 → collection=knowledge）。"""
     global _store
     path = chroma_path()
     if not path.is_dir():
@@ -62,18 +57,70 @@ def get_store() -> Chroma | None:
     return _store
 
 
+def get_or_create_store() -> Chroma:
+    """确保内置 knowledge 库目录存在（建库脚本用）。"""
+    global _store
+    path = chroma_path()
+    path.mkdir(parents=True, exist_ok=True)
+    store = get_store()
+    if store is not None:
+        return store
+    with _store_lock:
+        if _store is None:
+            _store = Chroma(
+                collection_name=COLLECTION,
+                persist_directory=str(path),
+                embedding_function=_get_embeddings(),
+            )
+        return _store
+
+
+def get_user_store() -> Chroma | None:
+    """用户上传文档库；目录不存在则视为尚未入库。"""
+    global _user_store
+    path = user_chroma_path()
+    if not path.is_dir():
+        return None
+    if _user_store is None:
+        with _user_store_lock:
+            if _user_store is None:
+                _user_store = Chroma(
+                    collection_name=USER_COLLECTION,
+                    persist_directory=str(path),
+                    embedding_function=_get_embeddings(),
+                )
+    return _user_store
+
+
+def get_or_create_user_store() -> Chroma:
+    """用户上传写入专用库（与 knowledge 完全隔离）。"""
+    global _user_store
+    path = user_chroma_path()
+    path.mkdir(parents=True, exist_ok=True)
+    store = get_user_store()
+    if store is not None:
+        return store
+    with _user_store_lock:
+        if _user_store is None:
+            _user_store = Chroma(
+                collection_name=USER_COLLECTION,
+                persist_directory=str(path),
+                embedding_function=_get_embeddings(),
+            )
+        return _user_store
+
+
 def warmup() -> None:
     _get_embeddings()
     get_store()
+    get_user_store()
 
 
-def _where(corpus: str) -> dict:
-    return {"corpus": corpus}
-
-
-def _passes_distance_threshold(distance: float, *, max_distance: float) -> bool:
-    """Chroma 返回的为距离，越小越相似（cosine 空间下 0=完全一致）。"""
-    return distance <= max_distance
+def _where(corpus: str, *, user_id: int | None = None) -> dict:
+    # Chroma 新版本 where 顶层只能有一个算子；多条件用 $and + $eq
+    if corpus == CORPUS_USER and user_id is not None:
+        return {"user_id": {"$eq": str(user_id)}}
+    return {"corpus": {"$eq": corpus}}
 
 
 def format_hits(docs: list[Document]) -> str:
@@ -95,23 +142,26 @@ def search_hits(
     *,
     corpus: str,
     top_k: int = RECALL_K,
-    max_distance: float | None = None,
+    user_id: int | None = None,
 ) -> list[tuple[Document, float]]:
-    """向量召回，返回 (Document, distance)；distance 越小越相似。"""
+    """向量召回，返回 (Document, distance)；distance 越小越相似。相关性交给后续精排。"""
     q = (query or "").strip()
     if not q:
         return []
 
     if corpus not in get_domains():
         return []
+    if corpus == CORPUS_USER and user_id is None:
+        return []
 
-    store = get_store()
+    store = get_user_store() if corpus == CORPUS_USER else get_store()
     if store is None:
         return []
 
-    cutoff = _rag_max_distance() if max_distance is None else max_distance
-    pairs = store.similarity_search_with_score(q, k=top_k, filter=_where(corpus))
-    return [(doc, float(score)) for doc, score in pairs if _passes_distance_threshold(float(score), max_distance=cutoff)]
+    pairs = store.similarity_search_with_score(
+        q, k=top_k, filter=_where(corpus, user_id=user_id)
+    )
+    return [(doc, float(score)) for doc, score in pairs]
 
 
 def _doc_key(doc: Document) -> str:
@@ -138,8 +188,13 @@ def retrieve_context(
     corpus: str,
     recall_k: int | None = None,
     rerank_top_k: int | None = None,
+    user_id: int | None = None,
 ) -> str:
-    """多问句粗召回 → 去重合并 → DashScope 精排 → 格式化注入上下文。"""
+    """多问句粗召回 → 去重合并 → DashScope 精排 → 格式化注入上下文。
+
+    - corpus=user：只查用户上传库 user_knowledge（需 user_id）
+    - corpus=agent/interview：只查内置 knowledge
+    """
     from common.rerank import rerank_documents
 
     qs = [q.strip() for q in questions if (q or "").strip()]
@@ -149,14 +204,23 @@ def retrieve_context(
     if corpus not in get_domains():
         return f"未知 corpus={corpus!r}"
 
-    if get_store() is None:
-        return (
-            f"向量库未构建：{chroma_path()}。"
-            "请在 backend_langchain 下运行：python Scripts/build_rag_knowledge.py"
-        )
-
     k_recall = RECALL_K if recall_k is None else recall_k
-    batches = [search_hits(q, corpus=corpus, top_k=k_recall) for q in qs]
+
+    if corpus == CORPUS_USER:
+        if user_id is None:
+            return _NO_HITS_MSG
+        batches = [
+            search_hits(q, corpus=CORPUS_USER, top_k=k_recall, user_id=user_id)
+            for q in qs
+        ]
+    else:
+        if get_store() is None:
+            return (
+                f"向量库未构建：{chroma_path()}。"
+                "请在 backend_langchain 下运行：python Scripts/build_rag_knowledge.py"
+            )
+        batches = [search_hits(q, corpus=corpus, top_k=k_recall) for q in qs]
+
     merged = _merge_hits(batches)
     if not merged:
         return _NO_HITS_MSG
@@ -167,14 +231,19 @@ def retrieve_context(
     return format_hits(ranked)
 
 
-# 兼容旧 import 路径
 __all__ = [
     "COLLECTION",
+    "USER_COLLECTION",
     "CORPUS_AGENT",
     "CORPUS_INTERVIEW",
+    "CORPUS_USER",
     "chroma_path",
+    "user_chroma_path",
     "format_hits",
     "get_store",
+    "get_or_create_store",
+    "get_user_store",
+    "get_or_create_user_store",
     "retrieve_context",
     "search_hits",
     "warmup",

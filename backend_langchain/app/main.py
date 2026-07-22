@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import init_db_tables
-from app.routers import api, interview, user
+from app.routers import api, documents, interview, user
 from app.settings import MEDIA_ROOT
 from common.agent import close_checkpointer, init_checkpointer, warmup_agent_executors
 from logging_config import LOGGING
@@ -27,26 +27,36 @@ async def lifespan(app: FastAPI):
     await init_db_tables()
     logger.info("database tables ready")
     await init_checkpointer()
-    try:
-        from MCP.mcp_multiserver import aload_mcp_tools_once
 
-        await aload_mcp_tools_once()
-    except Exception:
-        logger.exception("MCP startup preload failed (will retry on first tool build)")
-    if os.environ.get("SKIP_RAG_STARTUP_WARMUP", "").lower() not in ("1", "true", "yes"):
+    async def _startup_bg() -> None:
+        # MCP / warmup 放到后台，避免阻塞会话列表等轻量 API（热重载时尤其明显）
         try:
-            from Langchain_Agent.tools import warmup_all_tool_singletons
-            from common.skill_router import warmup_skill_phrase_cache
+            from MCP.mcp_multiserver import aload_mcp_tools_once
 
-            await asyncio.to_thread(warmup_all_tool_singletons)
-            await asyncio.to_thread(warmup_skill_phrase_cache)
-            await asyncio.to_thread(warmup_agent_executors)
-            logger.info("startup warmup finished")
+            await aload_mcp_tools_once()
         except Exception:
-            logger.exception("startup warmup failed (first request will retry)")
-    else:
-        logger.info("SKIP_RAG_STARTUP_WARMUP set, skip warmup")
+            logger.exception("MCP startup preload failed (will retry on first tool build)")
+        if os.environ.get("SKIP_RAG_STARTUP_WARMUP", "").lower() not in ("1", "true", "yes"):
+            try:
+                from Langchain_Agent.tools import warmup_all_tool_singletons
+                from common.skill_router import warmup_skill_phrase_cache
+
+                await asyncio.to_thread(warmup_all_tool_singletons)
+                await asyncio.to_thread(warmup_skill_phrase_cache)
+                await asyncio.to_thread(warmup_agent_executors)
+                logger.info("startup warmup finished")
+            except Exception:
+                logger.exception("startup warmup failed (first request will retry)")
+        else:
+            logger.info("SKIP_RAG_STARTUP_WARMUP set, skip warmup")
+
+    bg = asyncio.create_task(_startup_bg())
     yield
+    bg.cancel()
+    try:
+        await bg
+    except asyncio.CancelledError:
+        pass
     await close_checkpointer()
 
 
@@ -79,6 +89,7 @@ app.mount("/media", StaticFiles(directory=str(MEDIA_ROOT)), name="media")
 
 app.include_router(user.router)
 app.include_router(api.router)
+app.include_router(documents.router)
 app.include_router(interview.router)
 
 

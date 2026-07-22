@@ -1,91 +1,81 @@
-"""Markdown → HTML → PDF（xhtml2pdf），供 finalize_pdf_export 工具落盘并通过 MEDIA 提供下载。"""
+"""把模型生成的 Markdown/文本写入 PDF（fpdf2 + 中文字体），不做复杂排版引擎。"""
 
 from __future__ import annotations
 
-import html
 import logging
 import os
 import re
+import shutil
 import sys
-from io import BytesIO
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
 _MAX_MARKDOWN_CHARS = 200_000
+_FONT_FAMILY = "PdfCJK"
+_font_file: Path | None = None
 
 
-def _try_register_ttf(pdfmetrics: Any, TTFont: Any, path: Path, subfont_index: int | None) -> bool:
-    """尝试注册为 PdfExportFont；成功返回 True。"""
-    try:
-        if subfont_index is None:
-            pdfmetrics.registerFont(TTFont("PdfExportFont", str(path)))
-        else:
-            pdfmetrics.registerFont(TTFont("PdfExportFont", str(path), subfontIndex=subfont_index))
-        return True
-    except Exception:
-        return False
+def _project_font_dir() -> Path:
+    from app.settings import MEDIA_ROOT
+
+    d = Path(MEDIA_ROOT) / "pdf_fonts"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
-def _register_cjk_font() -> str:
-    """注册可嵌入 PDF 的中文字体，返回 CSS font-family 名；失败则用 Helvetica（中文会成方框）。"""
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-
-    if "PdfExportFont" in pdfmetrics.getRegisteredFontNames():
-        return "PdfExportFont"
-
+def _pick_source_font() -> Path | None:
     env_path = (os.environ.get("PDF_EXPORT_FONT") or "").strip()
-    candidates: list[tuple[Path, int | None]] = []
-
     if env_path:
         p = Path(env_path)
         if p.is_file():
-            # 单字体文件：无 subfont；.ttc 可尝试 0/1
-            if p.suffix.lower() == ".ttc":
-                candidates.append((p, 0))
-                candidates.append((p, 1))
-            else:
-                candidates.append((p, None))
-
+            return p
     if os.name == "nt":
         windir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
-        for name, idx in (
-            ("msyh.ttc", 0),
-            ("msyh.ttc", 1),
-            ("msyhl.ttc", 0),
-            ("simsun.ttc", 0),
-            ("simsun.ttc", 1),
-            ("simhei.ttf", None),
-            ("msyhbd.ttc", 0),
-        ):
-            candidates.append((windir / name, idx))
+        for name in ("simhei.ttf", "simkai.ttf"):
+            p = windir / name
+            if p.is_file():
+                return p
+        # fpdf2 对 TTC 支持不稳定，仅作最后回退
+        for name in ("msyh.ttc", "simsun.ttc"):
+            p = windir / name
+            if p.is_file():
+                return p
     else:
         for cand in (
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
             "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
         ):
-            cp = Path(cand)
-            if cp.is_file():
-                candidates.append((cp, 0))
-                candidates.append((cp, 1))
-                break
+            p = Path(cand)
+            if p.is_file():
+                return p
+    return None
 
-    for path, sub_idx in candidates:
-        if not path.is_file():
-            continue
-        if _try_register_ttf(pdfmetrics, TTFont, path, sub_idx):
-            logger.info("PDF 导出：已注册中文字体 %s (subfont=%s)", path, sub_idx)
-            return "PdfExportFont"
 
-    logger.warning(
-        "PDF 导出：未注册任何中文字体，中文将显示为方框；请设置 PDF_EXPORT_FONT 为 .ttf/.ttc 完整路径"
-    )
-    return "Helvetica"
+def _ensure_font_file() -> Path:
+    """系统字体拷到 MEDIA，避免直接读 Windows\\Fonts 出权限问题。"""
+    global _font_file
+    if _font_file is not None and _font_file.is_file():
+        return _font_file
+
+    src = _pick_source_font()
+    if src is None:
+        raise RuntimeError(
+            "未找到可用中文字体。请设置 PDF_EXPORT_FONT 为 .ttf 完整路径 "
+            r"（例如 C:\Windows\Fonts\simhei.ttf）"
+        )
+
+    dest = _project_font_dir() / src.name
+    try:
+        if (not dest.is_file()) or dest.stat().st_size != src.stat().st_size:
+            shutil.copy2(src, dest)
+        _font_file = dest
+    except OSError:
+        _font_file = src
+    logger.info("PDF 导出字体: %s", _font_file)
+    return _font_file
 
 
 def _slug_filename(title: str) -> str:
@@ -95,14 +85,24 @@ def _slug_filename(title: str) -> str:
     return s[:120]
 
 
+def _strip_inline_md(text: str) -> str:
+    """去掉常见行内标记，保留正文（不做完整 Markdown 解析）。"""
+    s = text
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)
+    s = re.sub(r"__(.+?)__", r"\1", s)
+    s = re.sub(r"\*(.+?)\*", r"\1", s)
+    s = re.sub(r"_(.+?)_", r"\1", s)
+    s = re.sub(r"`([^`]+)`", r"\1", s)
+    s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
+    return s
+
+
 def markdown_to_pdf_bytes(title: str, body_markdown: str) -> bytes:
     try:
-        import markdown
-        from xhtml2pdf import pisa
+        from fpdf import FPDF
     except ImportError as e:
         raise RuntimeError(
-            "PDF 导出缺少依赖：请在**启动后端的同一 Python 解释器**中执行 "
-            "`pip install markdown xhtml2pdf`（或 `pip install -r requirements.txt`）。"
+            "PDF 导出缺少依赖：请对运行后端的同一解释器执行 `pip install fpdf2`。"
             f" 当前解释器：{sys.executable}"
         ) from e
 
@@ -110,70 +110,73 @@ def markdown_to_pdf_bytes(title: str, body_markdown: str) -> bytes:
     if len(md) > _MAX_MARKDOWN_CHARS:
         md = md[:_MAX_MARKDOWN_CHARS] + "\n\n…（正文过长已截断）"
 
-    font = _register_cjk_font()
-    # xhtml2pdf 对继承字体不稳定：强制全文（含 markdown 生成的 p/li/pre）使用同一套可显示中文的字体。
-    # 勿对 pre/code 单独指定 DejaVu 等西文字体，否则中文代码/正文会变成方框。
-    body_html = markdown.markdown(
-        md,
-        extensions=["extra", "sane_lists", "nl2br"],
-        output_format="html",
-    )
-    safe_title = html.escape((title or "").strip() or "文档", quote=True)
-    doc_html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
-@page {{ size: A4; margin: 18mm; }}
-html, body, div, p, span, li, ol, ul, td, th, h1, h2, h3, h4, h5, h6, blockquote, strong, em, a, pre, code, table, thead, tbody {{
-  font-family: {font}, Arial, Helvetica, sans-serif !important;
-}}
-body {{ font-size: 11pt; line-height: 1.45; color: #222; }}
-h1 {{ font-size: 18pt; margin: 0 0 12pt 0; padding-bottom: 8pt; border-bottom: 1px solid #ccc; }}
-h2 {{ font-size: 14pt; margin: 16pt 0 8pt 0; }}
-h3 {{ font-size: 12pt; margin: 12pt 0 6pt 0; }}
-pre, code {{ font-size: 9.5pt; }}
-pre {{ background: #f6f8fa; padding: 8pt; border-radius: 4pt; white-space: pre-wrap; word-break: break-word; }}
-code {{ background: #f0f0f0; padding: 1px 4px; border-radius: 2px; }}
-ul, ol {{ margin: 6pt 0; padding-left: 22pt; }}
-blockquote {{ margin: 8pt 0; padding-left: 12pt; border-left: 3pt solid #ddd; color: #444; }}
-table {{ border-collapse: collapse; width: 100%; margin: 8pt 0; }}
-th, td {{ border: 1px solid #ccc; padding: 4pt 6pt; font-size: 10pt; }}
-</style></head><body>
-<h1>{safe_title}</h1>
-{body_html}
-</body></html>"""
+    font_path = _ensure_font_file()
+    pdf = FPDF(format="A4", unit="mm")
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.set_margins(18, 18, 18)
+    pdf.add_page()
+    pdf.add_font(_FONT_FAMILY, fname=str(font_path))
 
-    out = BytesIO()
-    pdf = pisa.CreatePDF(
-        src=BytesIO(doc_html.encode("utf-8")),
-        dest=out,
-        encoding="utf-8",
-    )
-    if pdf.err:
-        raise RuntimeError("xhtml2pdf 生成失败")
-    data = out.getvalue()
+    def _write(text: str, *, size: float, line_h: float) -> None:
+        pdf.set_font(_FONT_FAMILY, size=size)
+        pdf.multi_cell(
+            w=pdf.epw,
+            h=line_h,
+            text=text if text else " ",
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+
+    # 标题
+    _write((title or "").strip() or "文档", size=18, line_h=10)
+    pdf.ln(4)
+
+    # 正文：按行写入；# 标题略放大，其余正文
+    in_code = False
+    for raw in md.splitlines():
+        line = raw.rstrip("\n")
+        fence = line.strip().startswith("```")
+        if fence:
+            in_code = not in_code
+            _write(line.strip() or " ", size=9, line_h=5)
+            continue
+
+        if in_code:
+            _write(line if line else " ", size=9, line_h=5)
+            continue
+
+        heading = re.match(r"^(#{1,3})\s+(.*)$", line)
+        if heading:
+            level = len(heading.group(1))
+            text = _strip_inline_md(heading.group(2).strip()) or " "
+            size = {1: 16, 2: 14, 3: 12}[level]
+            pdf.ln(2)
+            _write(text, size=size, line_h=size * 0.55)
+            continue
+
+        text = _strip_inline_md(line)
+        if not text.strip():
+            pdf.ln(3)
+            continue
+        text = re.sub(r"^[-*+]\s+", "- ", text)
+        _write(text, size=11, line_h=7)
+
+    out = pdf.output()
+    data = bytes(out)
     if not data:
         raise RuntimeError("PDF 字节为空")
     return data
 
 
 def write_conversation_pdf(title: str, body_markdown: str) -> tuple[str, str]:
-    """
-    写入 MEDIA_ROOT/pdf_exports/{uuid}.pdf，返回 (相对站点的 URL 路径, 建议下载文件名)。
-    URL 形如 /media/pdf_exports/....pdf
-
-    正文仅来自工具参数 body_markdown（由模型根据对话组织），不从数据库拉取会话内容。
-    """
+    """写入 MEDIA_ROOT/pdf_exports/{uuid}.pdf，返回 (URL 路径, 下载文件名)。"""
     from app.settings import MEDIA_ROOT, MEDIA_URL
 
-    media_root = Path(MEDIA_ROOT)
-    subdir = media_root / "pdf_exports"
+    subdir = Path(MEDIA_ROOT) / "pdf_exports"
     subdir.mkdir(parents=True, exist_ok=True)
     name = f"{uuid4().hex}.pdf"
     path = subdir / name
     path.write_bytes(markdown_to_pdf_bytes(title, body_markdown))
 
     base = str(MEDIA_URL).rstrip("/")
-    rel_url = f"{base}/pdf_exports/{name}"
-    download_name = f"{_slug_filename(title)}.pdf"
-    return rel_url, download_name
-
+    return f"{base}/pdf_exports/{name}", f"{_slug_filename(title)}.pdf"

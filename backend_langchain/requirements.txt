@@ -27,5 +27,7 @@ PyYAML>=6.0.1,<7.0
 # 0.22+ 移除 Connection.is_alive，与 langgraph-checkpoint-sqlite 2.x 不兼容
 aiosqlite>=0.20.0,<0.22.0
 markdown>=3.5,<4.0
-xhtml2pdf>=0.2.16,<0.3
+fpdf2>=2.8.0,<3.0
+pdfplumber>=0.11.0,<1.0
 httpx>=0.27.0,<1.0
+oss2>=2.18.0,<3.0

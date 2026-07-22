@@ -1,18 +1,24 @@
-"""PDF 字节 → 纯文本（PyPDFLoader + 与建库相同的 clean_pdf_text）。"""
+"""PDF 文本抽取：pdfplumber（文件路径 / 字节 / data URL）。"""
 from __future__ import annotations
 
 import base64
-import sys
 import tempfile
 from pathlib import Path
 
-from langchain_community.document_loaders import PyPDFLoader
+from common.document_pipeline.cleanup import clean_pdf_text
 
-_SCRIPTS = Path(__file__).resolve().parent.parent / "Scripts"
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
 
-from file_cleanup import clean_pdf_text  # noqa: E402
+def extract_pdf_pages(pdf_path: Path) -> list[tuple[int, str]]:
+    """返回 (页码从 1 起, 该页原始文本)。"""
+    import pdfplumber
+
+    pages: list[tuple[int, str]] = []
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        for i, page in enumerate(pdf.pages, start=1):
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append((i, text))
+    return pages
 
 
 def _decode_data_url(data_url: str) -> bytes:
@@ -26,6 +32,7 @@ def _decode_data_url(data_url: str) -> bytes:
 
 
 def extract_pdf_text(data: bytes) -> str:
+    """PDF 字节 → 清洗后纯文本（与建库流水线一致）。"""
     if not data:
         return ""
     path: str | None = None
@@ -34,8 +41,8 @@ def extract_pdf_text(data: bytes) -> str:
             tmp.write(data)
             path = tmp.name
         parts: list[str] = []
-        for page in PyPDFLoader(path).load():
-            text = clean_pdf_text(page.page_content or "")
+        for _page_num, raw in extract_pdf_pages(Path(path)):
+            text = clean_pdf_text(raw)
             if text:
                 parts.append(text)
         return "\n\n".join(parts).strip()

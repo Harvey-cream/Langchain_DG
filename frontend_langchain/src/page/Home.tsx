@@ -28,8 +28,8 @@ const Home: React.FC = () => {
       <div className="home-landing">
         <div className="home-grid-bg" aria-hidden />
         <header className="home-header">
-          <h1 className="home-title">小龙AI超级智能体</h1>
-          <p className="home-subtitle">/ 探索AI的无限可能 /</p>
+          <h1 className="home-title">小龙 AI</h1>
+          <p className="home-subtitle">/ 企业知识库 · 面试陪练 /</p>
         </header>
 
         <div className="home-cards">
@@ -37,8 +37,8 @@ const Home: React.FC = () => {
             <div className="home-card-icon home-card-icon--agent">
               <RobotOutlined />
             </div>
-            <h2 className="home-card-title">AI超级智能体</h2>
-            <p className="home-card-desc">全能型AI助手，解决各类专业问题</p>
+            <h2 className="home-card-title">企业知识库AI助手</h2>
+            <p className="home-card-desc">上传文档，基于你的资料做检索问答与摘要</p>
             <button
               type="button"
               className="home-card-btn"

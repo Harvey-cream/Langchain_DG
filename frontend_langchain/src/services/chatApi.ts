@@ -1,5 +1,5 @@
 /**
- * 对话页与后端交互的抽象：超级智能体走 /api/agent/，面试大师走 /api/interview/（独立表）。
+ * 对话页与后端交互的抽象：知识库助手走 /api/agent/，面试大师走 /api/interview/（独立表）。
  */
 import {
   getConversations,
@@ -40,7 +40,7 @@ export type ChatApiClient = {
   ) => Promise<void>;
 };
 
-/** 默认：超级智能体 + user_conversations / user_sessions */
+/** 默认：知识库助手 + user_conversations / user_sessions */
 export const agentChatApi: ChatApiClient = {
   getConversations,
   getConversationMessages,

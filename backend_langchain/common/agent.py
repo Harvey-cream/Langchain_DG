@@ -1,7 +1,7 @@
 """LangGraph Agent 核心：Workflow（skill_recall）+ Agent（model ↔ tools）、checkpoint、流式事件。
 
-START → skill_recall（Skill 向量路由 + RAG 门控 LLM + 按需检索）→ agent → tools → agent …
-两个 Agent 共用 `build_agent_graph`，差异在 tools、system_prompt、recall_mode。
+子 Agent 共用 `build_agent_graph`（可传入 skills catalog）；知识库/面试线在各自 runtime 组装。
+图结构：START → skill_recall → agent → tools → agent …
 """
 from __future__ import annotations
 
@@ -34,8 +34,8 @@ if __package__ in {None, ""}:
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-from common.pdf_extract import extract_pdf_text_from_data_url
-from common.skill_router import prepare_turn_context
+from common.document_pipeline import extract_pdf_text_from_data_url
+from common.skill_router import SkillSpec, prepare_turn_context
 from config.config import QUERY_REWRITE_CONTEXT_TURNS, get_qwen_chat_model
 
 RecallModeParam = Literal["main", "interview"]
@@ -203,6 +203,7 @@ class AgentState(TypedDict):
     skill_name: str
     skill_context: str
     retrieved_context: str
+    next_agent: str  # 知识库总控写入；子图/面试可置空
 
 
 def _latest_user_text(messages: list[BaseMessage]) -> str:
@@ -259,15 +260,21 @@ def build_agent_graph(
     recall_mode: RecallModeParam,
     temperature: float = 0.45,
     streaming: bool = False,
+    skills: tuple[SkillSpec, ...] | None = None,
+    use_checkpointer: bool = True,
 ) -> CompiledStateGraph:
-    """编译 LangGraph：START 后固定 skill_recall，再 agent ↔ tools（MCP/PDF）。"""
+    """编译 LangGraph：START 后固定 skill_recall，再 agent ↔ tools（MCP/PDF）。
+
+    use_checkpointer=False：作为总控图子节点挂载时由父图统一 checkpoint。
+    """
     tools_list = list(tools)
     model = get_qwen_chat_model(temperature=temperature, streaming=streaming)
     if tools_list:
         model = model.bind_tools(tools_list)
     system_message = SystemMessage(content=system_prompt)
+    skill_catalog = skills
 
-    async def skill_recall_node(state: AgentState) -> dict[str, str]:
+    async def skill_recall_node(state: AgentState, config: RunnableConfig) -> dict[str, str]:
         user_text = _latest_user_text(state["messages"])
         if not user_text:
             return {"skill_name": "", "skill_context": "", "retrieved_context": ""}
@@ -277,11 +284,24 @@ def build_agent_graph(
         def _on_search() -> None:
             writer({"type": "status", "text": "正在搜索..."})
 
+        uid: int | None = None
+        cfg = config.get("configurable") or {}
+        tid = str(cfg.get("thread_id") or "")
+        # thread_id = agent:{user_id}:{conversation_id}
+        parts = tid.split(":")
+        if len(parts) >= 2 and parts[0] == "agent":
+            try:
+                uid = int(parts[1])
+            except ValueError:
+                uid = None
+
         spec, skill_context, retrieved = await prepare_turn_context(
             user_text,
             mode=recall_mode,  # type: ignore[arg-type]
             recent_dialogue=format_recent_dialogue(state["messages"]),
             on_search=_on_search,
+            user_id=uid if recall_mode == "main" else None,
+            skills=skill_catalog,
         )
         return {
             "skill_name": spec.name if spec else "",
@@ -319,7 +339,9 @@ def build_agent_graph(
     builder.add_edge("skill_recall", "agent")
     builder.add_conditional_edges("agent", tools_condition, {"tools": "tools", END: END})
     builder.add_edge("tools", "agent")
-    return builder.compile(checkpointer=get_checkpointer())
+    if use_checkpointer:
+        return builder.compile(checkpointer=get_checkpointer())
+    return builder.compile()
 
 
 # =============================================================================
@@ -358,6 +380,7 @@ async def stream_graph_chat_model_events(
             "skill_name": "",
             "skill_context": "",
             "retrieved_context": "",
+            "next_agent": "",
         }
 
     seen_pdf: set[tuple[str, str]] = set()
@@ -388,10 +411,18 @@ async def stream_graph_chat_model_events(
 
 
 def warmup_agent_executors(*, temperature: float = 0.45) -> None:
-    """进程启动时预热三张流式图（主对话本地/联网 + 面试），避免首请求冷启动。"""
-    from Langchain_Agent import runtime
+    """进程启动时预热知识库总控（本地/联网）与面试图，避免首请求冷启动。"""
+    from Langchain_Agent.runtime_interview import (
+        get_stream_interview_executor,
+        reset_interview_agent_cache,
+    )
+    from Langchain_Agent.runtime_knowledge import (
+        get_knowledge_supervisor,
+        reset_knowledge_agent_cache,
+    )
 
-    runtime.reset_stream_agent_cache()
-    runtime.get_stream_agent_executor(temperature=temperature, enable_web_search=False)
-    runtime.get_stream_agent_executor(temperature=temperature, enable_web_search=True)
-    runtime.get_stream_interview_executor(temperature=temperature)
+    reset_knowledge_agent_cache()
+    reset_interview_agent_cache()
+    get_knowledge_supervisor(temperature=temperature, enable_web_search=False)
+    get_knowledge_supervisor(temperature=temperature, enable_web_search=True)
+    get_stream_interview_executor(temperature=temperature)

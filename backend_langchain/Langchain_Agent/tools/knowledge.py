@@ -1,4 +1,4 @@
-"""MCP 工具装配与向量库预热（RAG 召回已移至 LangGraph skill_recall Workflow 节点）。"""
+"""企业知识库线：MCP 工具装配与向量库预热（RAG 召回在 skill_recall 节点）。"""
 from __future__ import annotations
 
 import asyncio
@@ -60,6 +60,7 @@ def _mcp_tool_with_sync_invoke(tool: object) -> object:
 
 
 def get_all_agent_tools(*, enable_web_search: bool = False) -> list:
+    """知识问答 Agent：PDF HITL + MCP（可选联网）。"""
     from common.tools import get_builtin_pdf_tools
     from MCP.mcp_multiserver import load_mcp_tools_once
 
@@ -69,7 +70,6 @@ def get_all_agent_tools(*, enable_web_search: bool = False) -> list:
     return get_builtin_pdf_tools() + mcp_tools
 
 
-def get_interview_tools() -> list:
-    from common.tools import get_builtin_pdf_tools
-
-    return get_builtin_pdf_tools()
+def get_summary_tools() -> list:
+    """文档摘要 Agent：不挂 MCP；摘要依赖 RAG 注入，避免工具面干扰。"""
+    return []

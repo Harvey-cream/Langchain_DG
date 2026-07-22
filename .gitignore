@@ -102,3 +102,12 @@ backend_langchain/common/data/langgraph_checkpoints.sqlite3-wal
 # Chroma 向量库（本地已向量化产物，勿提交；线上 build_rag_knowledge.py 从 docs1/docs2 重建）
 backend_langchain/Langchain_knowledge/chroma/
 backend_langchain/Langchain_knowledge/chroma_db/
+
+# 清洗/切块预览与基准输出（脚本生成，勿提交）
+backend_langchain/common/data/clean_chunk_preview/
+backend_langchain/common/data/cleanup_benchmark.json
+
+# PDF 导出落盘与本地字体缓存（运行时生成）
+backend_langchain/media/
+backend_langchain/common/data/pdf_exports/
+backend_langchain/common/data/pdf_fonts/
