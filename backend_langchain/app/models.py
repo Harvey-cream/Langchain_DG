@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -65,17 +65,21 @@ class UserSession(Base):
 
 
 class AgentWebSource(Base):
-    """知识库会话联网来源：一轮 session 对应一条 JSON 列表。"""
+    """知识库会话联网来源：一轮 session 对应一条 JSON 列表。
+
+    session_id / conversation_id 须与线上 user_sessions.id、user_conversations.id
+    同为 INT（部分库为 BIGINT；若 FK 3780 再按 SHOW CREATE 对齐）。
+    """
 
     __tablename__ = "agent_web_sources"
     __table_args__ = (UniqueConstraint("session_id", name="uq_agent_web_sources_session"),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    session_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("user_sessions.id"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(Integer, ForeignKey("user_sessions.id"))
     conversation_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("user_conversations.id"), nullable=True, index=True
+        Integer, ForeignKey("user_conversations.id"), nullable=True, index=True
     )
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.user_id"), index=True)
     sources_json: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), server_default=func.now()
