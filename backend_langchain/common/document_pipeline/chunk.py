@@ -1,10 +1,9 @@
-"""文档切分：加载、清洗后切 chunk，以及增量去重用的 source_path 查询。"""
+"""文档切分：加载、清洗后切 chunk。"""
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -17,7 +16,6 @@ from common.document_pipeline.cleanup import (
 from common.document_pipeline.pdf import extract_pdf_pages
 from config.config import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
 
-_CHROMA_PAGE = 5000
 _H2 = re.compile(r"^##\s")
 _H3 = re.compile(r"^###\s")
 _MIN_CHUNK_CHARS = 80
@@ -26,31 +24,6 @@ _PREAMBLE_MERGE_CHARS = 200
 
 def rag_metadata(*, corpus: str, domain: str, source_path: str) -> dict[str, str]:
     return {"corpus": corpus, "domain": domain, "source_path": source_path}
-
-
-def existing_source_paths(chroma_dir: Path, *, collection: str) -> set[str]:
-    """库内已有文件的 source_path（增量建库时跳过）。"""
-    if not chroma_dir.is_dir():
-        return set()
-    probe = Chroma(
-        persist_directory=str(chroma_dir),
-        embedding_function=None,
-        collection_name=collection,
-    )
-    out: set[str] = set()
-    offset = 0
-    while True:
-        batch = probe.get(include=["metadatas"], limit=_CHROMA_PAGE, offset=offset)
-        metas = batch.get("metadatas") or []
-        if not metas:
-            break
-        for m in metas:
-            if m and (sp := m.get("source_path")):
-                out.add(str(sp))
-        if len(metas) < _CHROMA_PAGE:
-            break
-        offset += _CHROMA_PAGE
-    return out
 
 
 def _split_by_header(text: str, pattern: re.Pattern[str]) -> list[str]:

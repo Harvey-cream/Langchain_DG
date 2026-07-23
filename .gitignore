@@ -94,7 +94,7 @@ backend_langchain/env/settings_debug.yaml
 backend_langchain/config/mcp_servers.json
 backend_langchain/MCP/mcp_servers.json
 
-# Chroma 向量库（本地已向量化产物，勿提交；线上 build_rag_knowledge.py 从 docs1/docs2 重建）
+# Chroma 旧目录（已迁 pgvector，若本地仍有残留目录勿提交）
 backend_langchain/Langchain_knowledge/chroma/
 backend_langchain/Langchain_knowledge/chroma_db/
 

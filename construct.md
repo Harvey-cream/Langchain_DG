@@ -17,7 +17,7 @@
                     ┌────── 共用底座 ──────┐
                     │ skill_recall→agent   │
                     │ RAG · MCP · PDF      │
-                    │ 会话记忆 MySQL ckpt  │
+                    │ 会话记忆 PG ckpt     │
                     └──────────┬───────────┘
                                │ 流式结束后异步
                                ▼
@@ -68,8 +68,8 @@
 |------|------|
 | **LangGraph** | `skill_recall → agent ↔ tools`，子 Agent 共用图工厂 |
 | **Skill 路由** | 向量匹配意图 + 约束输出结构（每 Agent 独立 Skill 集） |
-| **RAG** | Chroma；用户库 `user_knowledge` 与面试库 `knowledge` 隔离 |
-| **会话记忆** | MySQL checkpoint（独立库）；超阈值压缩（摘要 + 保留近几轮） |
+| **RAG** | pgvector（表 `rag_embeddings`）；corpus=user 与内置 `knowledge` 隔离 |
+| **会话记忆** | PostgreSQL checkpoint（独立库）；超阈值压缩（摘要 + 保留近几轮） |
 | **SSE** | 流式对话；附件当轮临时注入，不落库 |
 
 ---
@@ -114,7 +114,7 @@ Workflow 按意图路由子 Agent，可串联：`JD → 模拟 → 评估`。
 
 | 项 | 说明 |
 |----|------|
-| **时机** | 主回复流式结束、MySQL 落库之后 |
+| **时机** | 主回复流式结束、Postgres 落库之后 |
 | **职责** | 决策是否更新 `UserProfile`（目标岗、技术栈、偏好等） |
 | **原则** | 不进主链路，不增加首 token 延迟 |
 

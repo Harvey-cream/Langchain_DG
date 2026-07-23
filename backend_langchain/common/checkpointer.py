@@ -1,4 +1,4 @@
-"""LangGraph checkpoint：独立 MySQL 库（默认 langchain_checkpoint）。"""
+"""LangGraph checkpoint：独立 PostgreSQL 库（默认 langchain_checkpoint）。"""
 from __future__ import annotations
 
 import logging
@@ -11,104 +11,50 @@ _checkpointer_ctx: Any = None
 
 
 async def _ensure_checkpoint_database() -> None:
-    """确保 checkpoint 独立库存在，并统一为 utf8mb4_0900_ai_ci（MySQL 8 默认）。"""
-    import asyncmy
+    """确保 checkpoint 独立库存在（连默认 postgres 库执行 CREATE DATABASE）。"""
+    import asyncpg
 
     from app.settings import (
-        MYSQL_CHECKPOINT_DATABASE,
-        MYSQL_HOST,
-        MYSQL_PASSWORD,
-        MYSQL_PORT,
-        MYSQL_USER,
+        POSTGRES_CHECKPOINT_DATABASE,
+        POSTGRES_HOST,
+        POSTGRES_PASSWORD,
+        POSTGRES_PORT,
+        POSTGRES_USER,
     )
 
-    db = MYSQL_CHECKPOINT_DATABASE
-    collate = "utf8mb4_0900_ai_ci"
-    conn = await asyncmy.connect(
-        host=MYSQL_HOST,
-        port=int(MYSQL_PORT),
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD,
-        autocommit=True,
-    )
-    try:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=%s",
-                (db,),
-            )
-            if await cur.fetchone() is None:
-                await cur.execute(
-                    f"CREATE DATABASE `{db}` CHARACTER SET utf8mb4 COLLATE {collate}"
-                )
-            await cur.execute(
-                "SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA "
-                "WHERE SCHEMA_NAME=%s",
-                (db,),
-            )
-            row = await cur.fetchone()
-            current = (row[0] if row else "") or ""
-            if current != collate:
-                await cur.execute(
-                    f"ALTER DATABASE `{db}` CHARACTER SET utf8mb4 COLLATE {collate}"
-                )
-                await cur.execute(f"USE `{db}`")
-                await cur.execute("SHOW TABLES")
-                for (table_name,) in await cur.fetchall():
-                    await cur.execute(f"DROP TABLE IF EXISTS `{table_name}`")
-                logger.info(
-                    "checkpoint db collation migrated to %s (tables recreated on setup)",
-                    collate,
-                )
-    finally:
-        conn.close()
-
-
-async def _checkpoint_schema_ready() -> bool:
-    """checkpoint 表是否已建好（避免重复 setup 报 already exists）。"""
-    import asyncmy
-
-    from app.settings import (
-        MYSQL_CHECKPOINT_DATABASE,
-        MYSQL_HOST,
-        MYSQL_PASSWORD,
-        MYSQL_PORT,
-        MYSQL_USER,
-    )
-
-    conn = await asyncmy.connect(
-        host=MYSQL_HOST,
-        port=int(MYSQL_PORT),
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD,
-        db=MYSQL_CHECKPOINT_DATABASE,
-        autocommit=True,
+    db = POSTGRES_CHECKPOINT_DATABASE
+    conn = await asyncpg.connect(
+        host=POSTGRES_HOST,
+        port=int(POSTGRES_PORT),
+        user=POSTGRES_USER,
+        password=POSTGRES_PASSWORD,
+        database="postgres",
     )
     try:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT 1 FROM information_schema.TABLES "
-                "WHERE TABLE_SCHEMA=%s AND TABLE_NAME='checkpoints' LIMIT 1",
-                (MYSQL_CHECKPOINT_DATABASE,),
-            )
-            return await cur.fetchone() is not None
+        exists = await conn.fetchval(
+            "SELECT 1 FROM pg_database WHERE datname = $1", db
+        )
+        if not exists:
+            # CREATE DATABASE 不能在事务块内执行；asyncpg.execute 默认非事务
+            await conn.execute(f'CREATE DATABASE "{db}"')
+            logger.info("checkpoint database created: %s", db)
     finally:
-        conn.close()
+        await conn.close()
 
 
 async def init_checkpointer() -> Any:
     global _checkpointer, _checkpointer_ctx
     if _checkpointer is None:
-        from langgraph.checkpoint.mysql.asyncmy import AsyncMySaver
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-        from app.settings import CHECKPOINT_MYSQL_URL, MYSQL_CHECKPOINT_DATABASE
+        from app.settings import CHECKPOINT_POSTGRES_URL, POSTGRES_CHECKPOINT_DATABASE
 
         await _ensure_checkpoint_database()
-        _checkpointer_ctx = AsyncMySaver.from_conn_string(CHECKPOINT_MYSQL_URL)
+        _checkpointer_ctx = AsyncPostgresSaver.from_conn_string(CHECKPOINT_POSTGRES_URL)
         _checkpointer = await _checkpointer_ctx.__aenter__()
-        if not await _checkpoint_schema_ready():
-            await _checkpointer.setup()
-        logger.info("langgraph checkpointer ready db=%s", MYSQL_CHECKPOINT_DATABASE)
+        # setup() 幂等：建表 / 迁移，已存在则跳过
+        await _checkpointer.setup()
+        logger.info("langgraph checkpointer ready db=%s", POSTGRES_CHECKPOINT_DATABASE)
     return _checkpointer
 
 

@@ -1,6 +1,6 @@
 """
 全局配置：知识库 / 嵌入 / LLM。
-应用级配置（MySQL、LLM、DashScope、RAG）统一见 app.settings + env/settings_*.yaml。
+应用级配置（Postgres、LLM、DashScope、RAG）统一见 app.settings + env/settings_*.yaml。
 """
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-os.environ.setdefault("CHROMA_TELEMETRY", "0")
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
 from langchain_core.callbacks import (
@@ -57,15 +56,6 @@ DOMAIN_LABELS: dict[str, str] = {
 
 def knowledge_root() -> Path:
     return BASE_DIR / KNOWLEDGE_DIR_NAME
-
-
-def chroma_path() -> Path:
-    return knowledge_root() / "chroma" / COLLECTION
-
-
-def user_chroma_path() -> Path:
-    """用户上传文档专用向量库目录（与内置 knowledge 隔离）。"""
-    return knowledge_root() / "chroma" / USER_COLLECTION
 
 
 def list_domains(corpus: str) -> frozenset[str]:

@@ -1,9 +1,9 @@
 """诊断：用户上传文档为何对话检索不到。
 
 在 backend_langchain 下运行：
-  .venv\\Scripts\\python.exe Scripts/diagnose_user_rag.py
-  .venv\\Scripts\\python.exe Scripts/diagnose_user_rag.py --user-id 6
-  .venv\\Scripts\\python.exe Scripts/diagnose_user_rag.py --query "帮我找一下实习日志"
+  python Scripts/diagnose_user_rag.py
+  python Scripts/diagnose_user_rag.py --user-id 6
+  python Scripts/diagnose_user_rag.py --query "帮我找一下实习日志"
 """
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ async def _resolve_user_id(cli_uid: int | None) -> int | None:
             if row is not None:
                 return int(row)
     except Exception as e:  # noqa: BLE001
-        _warn(f"从 MySQL 推断 user_id 失败: {e}")
+        _warn(f"从 Postgres 推断 user_id 失败: {e}")
     return None
 
 
@@ -96,7 +96,7 @@ async def _list_ready_docs(user_id: int | None) -> list[dict]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="诊断 user_knowledge 检索失败原因")
-    parser.add_argument("--user-id", type=int, default=None, help="Chroma 过滤用的 user_id")
+    parser.add_argument("--user-id", type=int, default=None, help="pgvector 过滤用的 user_id")
     parser.add_argument(
         "--query",
         default="帮我找一下实习日志，内容是什么",
@@ -105,22 +105,16 @@ def main() -> int:
     parser.add_argument("--top-k", type=int, default=5)
     args = parser.parse_args()
 
-    from config.config import (
-        CORPUS_USER,
-        USER_COLLECTION,
-        user_chroma_path,
-    )
+    from config.config import CORPUS_USER
     from common.rag import (
-        get_user_store,
+        get_store,
         retrieve_context,
         search_hits,
     )
 
-    _section("1) 路径与配置")
-    path = user_chroma_path()
-    print(f"  collection={USER_COLLECTION}")
-    print(f"  path={path}")
-    print(f"  exists={path.is_dir()}")
+    _section("1) 配置")
+    print(f"  corpus={CORPUS_USER}")
+    print("  store=pgvector rag_embeddings")
     print("  distance threshold: removed (粗召回后由精排把关)")
 
     user_id = asyncio.run(_resolve_user_id(args.user_id))
@@ -129,7 +123,7 @@ def main() -> int:
         return 1
     _ok(f"user_id={user_id}")
 
-    _section("2) MySQL 已入库文档")
+    _section("2) Postgres 已入库文档")
     docs = asyncio.run(_list_ready_docs(user_id))
     if not docs:
         _warn("没有 status=ready 的 agent_documents（或读库失败）")
@@ -139,51 +133,36 @@ def main() -> int:
             f"file={d['filename']!r} chunks={d['chunks']} status={d['status']}"
         )
 
-    _section("3) Chroma user store 概况")
-    store = get_user_store()
-    if store is None:
-        _fail("get_user_store() 为 None（目录不存在或未初始化）")
-        return 1
+    _section("3) pgvector user corpus 概况")
+    store = get_store()
     try:
-        raw = store.get(include=["metadatas", "documents"])
-        ids = list(raw.get("ids") or [])
-        metas = list(raw.get("metadatas") or [])
-        bodies = list(raw.get("documents") or [])
-        _ok(f"向量条数={len(ids)}")
-        uid_set: set[str] = set()
-        for i, (mid, meta, body) in enumerate(zip(ids, metas, bodies), start=1):
-            meta = meta or {}
-            uid = str(meta.get("user_id") or "")
-            if uid:
-                uid_set.add(uid)
-            preview = (body or "").replace("\n", " ")[:80]
-            if i <= 8:
-                print(
-                    f"  [{i}] id={mid} user_id={uid!r} doc_id={meta.get('document_id')!r} "
-                    f"source={meta.get('source_path')!r} text={preview!r}"
-                )
-        print(f"  metadata.user_id 取值集合={sorted(uid_set)}")
-        if str(user_id) not in uid_set:
-            _warn(
-                f"库里没有 user_id={user_id!r} 的向量；"
-                f"过滤 {{user_id: $eq: '{user_id}'}} 会命中 0 条"
-            )
+        n = store.count(corpus=CORPUS_USER, user_id=user_id)
+        n_all = store.count(corpus=CORPUS_USER)
+        _ok(f"user_id={user_id} 向量条数={n}（corpus=user 合计 {n_all}）")
+        if n == 0:
+            _warn(f"库里没有 user_id={user_id} 的向量；检索会命中 0 条")
+        sources = store.list_source_paths(corpus=CORPUS_USER, user_id=user_id)
+        if sources:
+            print(f"  source_path 样例: {sorted(sources)[:8]}")
     except Exception as e:  # noqa: BLE001
-        _fail(f"读取 Chroma 失败: {e}")
+        _fail(f"读取 pgvector 失败: {e}")
         return 1
 
     query = (args.query or "").strip()
-    _section(f"4) 原始相似度（带 user_id 过滤） query={query!r}")
+    _section(f"4) 原始相似度（带 user_id） query={query!r}")
     try:
         pairs = store.similarity_search_with_score(
             query,
             k=args.top_k,
-            filter={"user_id": {"$eq": str(user_id)}},
+            corpus=CORPUS_USER,
+            user_id=user_id,
         )
         if not pairs:
-            _warn("带 user_id 过滤：0 条（过滤太严或该用户无向量）")
-            pairs_all = store.similarity_search_with_score(query, k=args.top_k)
-            print(f"  不加过滤 top{args.top_k}:")
+            _warn("带 user_id：0 条（该用户无向量或问句不匹配）")
+            pairs_all = store.similarity_search_with_score(
+                query, k=args.top_k, corpus=CORPUS_USER
+            )
+            print(f"  不加 user_id 过滤 top{args.top_k}:")
             for doc, score in pairs_all:
                 meta = doc.metadata or {}
                 print(
@@ -250,9 +229,8 @@ def main() -> int:
     print(
         "  - 若第6步 need_rag=False：修门控（knowledge_qa 强制检索）\n"
         "  - 若第4步带 user_id 为0、不带过滤有结果：user_id 元数据/登录用户不一致\n"
-        "  - 若第3步向量条数=0：入库未写入 user_knowledge\n"
-        "  - 粗召回不再做距离阈值；相关性由 rerank 把关\n"
-        "  - Chroma UI「未配置向量模型」只影响 UI 查询，不影响本脚本/后端 DashScope 召回"
+        "  - 若第3步向量条数=0：入库未写入 rag_embeddings\n"
+        "  - 粗召回不再做距离阈值；相关性由 rerank 把关"
     )
     return 0
 

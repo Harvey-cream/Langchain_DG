@@ -20,7 +20,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     fi; \
     apt-get update && apt-get install -y --no-install-recommends \
       libcairo2-dev \
-      default-libmysqlclient-dev \
       pkg-config \
       build-essential \
     && rm -rf /var/lib/apt/lists/*

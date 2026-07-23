@@ -215,27 +215,36 @@ def oss_config() -> dict[str, Any]:
     }
 
 
-# --- MySQL（yaml 已含 ${MYSQL_PASSWORD} 等插值）---
-_mysql = _section("mysql")
-MYSQL_USER = str(_mysql.get("user") or "root")
-MYSQL_PASSWORD = str(_mysql.get("password") or "root")
-MYSQL_HOST = str(_mysql.get("host") or "localhost")
-MYSQL_PORT = str(_mysql.get("port") or "3306")
-MYSQL_DATABASE = str(_mysql.get("database") or "langchain")
-# LangGraph checkpoint 独立库（与业务库分库）
-MYSQL_CHECKPOINT_DATABASE = str(
-    _mysql.get("checkpoint_database") or os.getenv("MYSQL_CHECKPOINT_DATABASE") or "langchain_checkpoint"
+# --- PostgreSQL（yaml 已含 ${POSTGRES_PASSWORD} 等插值）---
+_pg = _section("postgres")
+POSTGRES_USER = str(_pg.get("user") or "postgres")
+POSTGRES_PASSWORD = str(_pg.get("password") or "postgres")
+POSTGRES_HOST = str(_pg.get("host") or "localhost")
+POSTGRES_PORT = str(_pg.get("port") or "5432")
+POSTGRES_DATABASE = str(_pg.get("database") or "langchain")
+# LangGraph checkpoint 独立库（同实例，与业务库分库）
+POSTGRES_CHECKPOINT_DATABASE = str(
+    _pg.get("checkpoint_database")
+    or os.getenv("POSTGRES_CHECKPOINT_DATABASE")
+    or "langchain_checkpoint"
 ).strip() or "langchain_checkpoint"
 
+# 业务库：SQLAlchemy 异步方言 postgresql+asyncpg
 DATABASE_URL = (
-    f"mysql+asyncmy://{MYSQL_USER}:{MYSQL_PASSWORD}"
-    f"@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}?charset=utf8mb4"
+    f"postgresql+asyncpg://{quote_plus(POSTGRES_USER)}:{quote_plus(POSTGRES_PASSWORD)}"
+    f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DATABASE}"
 )
 
-# AsyncMySaver 使用 mysql://（非 SQLAlchemy 方言）
-CHECKPOINT_MYSQL_URL = (
-    f"mysql://{quote_plus(MYSQL_USER)}:{quote_plus(MYSQL_PASSWORD)}"
-    f"@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_CHECKPOINT_DATABASE}"
+# LangGraph AsyncPostgresSaver（psycopg3）与 pgvector 建库连接用 libpq URI
+CHECKPOINT_POSTGRES_URL = (
+    f"postgresql://{quote_plus(POSTGRES_USER)}:{quote_plus(POSTGRES_PASSWORD)}"
+    f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_CHECKPOINT_DATABASE}"
+)
+
+# pgvector 向量库与业务库同库（psycopg3 同步连接）
+VECTOR_POSTGRES_URL = (
+    f"postgresql://{quote_plus(POSTGRES_USER)}:{quote_plus(POSTGRES_PASSWORD)}"
+    f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DATABASE}"
 )
 
 # --- 应用 ---

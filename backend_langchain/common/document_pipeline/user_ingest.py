@@ -1,4 +1,4 @@
-"""用户上传文档：OSS → 清洗切块 → 独立 Chroma collection（user_knowledge）。"""
+"""用户上传文档：OSS → 清洗切块 → pgvector（corpus=user，按 user_id 隔离）。"""
 from __future__ import annotations
 
 import logging
@@ -10,22 +10,14 @@ from langchain_core.documents import Document
 
 from common.document_pipeline.ingest import chunks_from_path, detect_format
 from common.oss_client import delete_object, download_to_path
-from common.rag import get_or_create_user_store, get_user_store
+from common.rag import get_store
 from config.config import CORPUS_USER
 
 logger = logging.getLogger(__name__)
 
 
 def delete_document_vectors(document_id: int) -> int:
-    store = get_user_store()
-    if store is None:
-        return 0
-    found = store.get(where={"document_id": {"$eq": str(document_id)}})
-    ids = list(found.get("ids") or [])
-    if not ids:
-        return 0
-    store.delete(ids=ids)
-    return len(ids)
+    return get_store().delete_by_document_id(document_id)
 
 
 def ingest_user_document_from_oss(
@@ -63,9 +55,7 @@ def ingest_user_document_from_oss(
             meta["source_path"] = filename
             enriched.append(Document(page_content=ch.page_content, metadata=meta))
 
-        store = get_or_create_user_store()
-        store.add_documents(enriched)
-        return len(enriched)
+        return get_store().add(enriched)
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
 

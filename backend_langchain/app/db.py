@@ -31,7 +31,7 @@ def _apply_session_column_patches(sync_conn) -> None:
         existing = {c["name"] for c in insp.get_columns(table)}
         if column in existing:
             continue
-        sync_conn.execute(text(f"ALTER TABLE `{table}` ADD COLUMN `{column}` {ddl}"))
+        sync_conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {ddl}'))
         logger.info("schema patch: added %s.%s", table, column)
 
 

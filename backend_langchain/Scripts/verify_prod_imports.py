@@ -30,7 +30,7 @@ PROD_IMPORTS: list[tuple[str, str]] = [
     ("app.routers.user", "用户路由"),
     ("common.agent", "LangGraph"),
     ("common.stream", "SSE 流式"),
-    ("common.rag", "Chroma RAG"),
+    ("common.rag", "pgvector RAG"),
     ("common.embedding", "DashScope 嵌入"),
     ("common.skill_router", "Skill 路由"),
     ("common.rag_gate", "RAG 门控"),
@@ -65,7 +65,7 @@ REDUNDANT_TOP_LEVEL = frozenset(
         "cryptography",  # PyJWT[crypto] 会拉
         "typing_extensions",
         "tzdata",
-        "numpy",  # chromadb 会拉
+        "numpy",
         "python_multipart",
     }
 )
@@ -118,10 +118,9 @@ def main() -> int:
 
         names = {d.metadata["Name"] for d in md.distributions()}
         heavy = [
-            "chromadb",
-            "onnxruntime",
-            "kubernetes",
-            "grpcio",
+            "pgvector",
+            "asyncpg",
+            "psycopg",
             "langchain-community",
             "numpy",
             "sqlalchemy",

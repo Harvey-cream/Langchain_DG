@@ -1,30 +1,30 @@
-# Lanchain_DG：MySQL(db) + Redis + FastAPI(backend) + Nginx
+# Lanchain_DG：PostgreSQL+pgvector(db) + Redis + FastAPI(backend) + Nginx
 # 部署：cp .env.example .env 填密钥 → cp backend_langchain/env/settings_pro.example.yaml ...
 #         backend_langchain/env/settings_pro.yaml → bash build_fronted.sh → docker compose up -d --build
 
 services:
   db:
-    image: mysql:8.0
-    container_name: lanchain_mysql
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-authentication-plugin=mysql_native_password
+    image: pgvector/pgvector:pg16
+    container_name: lanchain_postgres
     restart: always
     environment:
-      # 业务库；checkpoint 独立库 langchain_checkpoint 由应用启动时 CREATE（勿用第二套 MYSQL_DATABASE）
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-langchain}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      # 业务库 + 向量库同库；checkpoint 独立库 langchain_checkpoint 由应用启动时 CREATE DATABASE
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DATABASE:-langchain}
     volumes:
-      # 可改为宿主机目录，例如：/wwwroot/lanchain/mysql_data:/var/lib/mysql
-      - mysql_data:/var/lib/mysql
+      # 可改为宿主机目录，例如：/wwwroot/lanchain/postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:${MYSQL_PUBLISH_PORT:-3307}:3306"
+      - "127.0.0.1:${POSTGRES_PUBLISH_PORT:-5433}:5432"
     networks:
       - shared_network
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-langchain} || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 25
-      start_period: 40s
+      start_period: 30s
 
   redis:
     image: redis:7.0-alpine
@@ -44,9 +44,11 @@ services:
       - .env
     environment:
       APP_ENV: ${APP_ENV:-production}
-      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
-      # 与 settings_pro.yaml mysql.checkpoint_database 对应；库由 init_checkpointer 自动创建
-      MYSQL_CHECKPOINT_DATABASE: ${MYSQL_CHECKPOINT_DATABASE:-langchain_checkpoint}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-langchain}
+      # 与 settings_pro.yaml postgres.checkpoint_database 对应；库由 init_checkpointer 自动创建
+      POSTGRES_CHECKPOINT_DATABASE: ${POSTGRES_CHECKPOINT_DATABASE:-langchain_checkpoint}
       # 以下由 .env 注入，供 settings_pro.yaml 中 ${OPENAI_API_KEY} 等插值
       # OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL
       # DASHSCOPE_API_KEY / APP_SECRET_KEY / APP_ALLOWED_HOST
@@ -59,7 +61,6 @@ services:
       - langgraph_data:/app/common/data
       - huggingface_cache:/root/.cache/huggingface
       - ./media:/app/media
-      - ./backend_langchain/Langchain_knowledge/chroma:/app/Langchain_knowledge/chroma
       - ./backend_langchain/env/settings_pro.yaml:/app/env/settings_pro.yaml:ro
     expose:
       - "8000"
@@ -104,6 +105,6 @@ networks:
     driver: bridge
 
 volumes:
-  mysql_data:
+  postgres_data:
   langgraph_data:
   huggingface_cache:

@@ -10,7 +10,7 @@ for line in raw.splitlines():
     if not all(c.isalnum() or c == "_" for c in k):
         continue
     if k.startswith(
-        ("OSS_", "OPENAI_", "DASH", "APP_", "MYSQL_", "REDIS_", "HF_")
+        ("OSS_", "OPENAI_", "DASH", "APP_", "POSTGRES_", "REDIS_", "HF_")
     ):
         vals[k] = v
 
@@ -33,16 +33,17 @@ lines = [
     f"APP_SECRET_KEY={vals.get('APP_SECRET_KEY', '')}",
     f"APP_ALLOWED_HOST={vals.get('APP_ALLOWED_HOST', '')}",
     "",
-    "# MySQL",
-    f"MYSQL_ROOT_PASSWORD={vals.get('MYSQL_ROOT_PASSWORD', '')}",
-    f"MYSQL_PASSWORD={vals.get('MYSQL_PASSWORD', '')}",
-    f"MYSQL_DATABASE={vals.get('MYSQL_DATABASE', 'langchain')}",
-    f"MYSQL_PUBLISH_PORT={vals.get('MYSQL_PUBLISH_PORT', '3307')}",
+    "# PostgreSQL",
+    f"POSTGRES_USER={vals.get('POSTGRES_USER', 'postgres')}",
+    f"POSTGRES_PASSWORD={vals.get('POSTGRES_PASSWORD', 'postgres')}",
+    f"POSTGRES_DATABASE={vals.get('POSTGRES_DATABASE', 'langchain')}",
+    f"POSTGRES_CHECKPOINT_DATABASE={vals.get('POSTGRES_CHECKPOINT_DATABASE', 'langchain_checkpoint')}",
+    f"POSTGRES_PUBLISH_PORT={vals.get('POSTGRES_PUBLISH_PORT', '5433')}",
     f"REDIS_PUBLISH_PORT={vals.get('REDIS_PUBLISH_PORT', '6379')}",
     "",
-    "# Optional local MySQL overrides",
-    "# MYSQL_HOST=localhost",
-    "# MYSQL_PORT=3306",
+    "# Optional local Postgres overrides",
+    "# POSTGRES_HOST=localhost",
+    "# POSTGRES_PORT=5432",
     "",
     "# SKIP_RAG_STARTUP_WARMUP=1",
     f"HF_ENDPOINT={vals.get('HF_ENDPOINT', 'https://hf-mirror.com')}",

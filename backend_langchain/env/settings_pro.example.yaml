@@ -9,13 +9,13 @@ app:
     - localhost
     - "127.0.0.1"
 
-mysql:
+postgres:
   host: db
-  port: 3306
-  database: "${MYSQL_DATABASE:-langchain}"
-  checkpoint_database: "${MYSQL_CHECKPOINT_DATABASE:-langchain_checkpoint}"
-  user: root
-  password: "${MYSQL_PASSWORD:-root}"
+  port: 5432
+  database: "${POSTGRES_DATABASE:-langchain}"
+  checkpoint_database: "${POSTGRES_CHECKPOINT_DATABASE:-langchain_checkpoint}"
+  user: "${POSTGRES_USER:-postgres}"
+  password: "${POSTGRES_PASSWORD:-postgres}"
 
 redis:
   host: redis

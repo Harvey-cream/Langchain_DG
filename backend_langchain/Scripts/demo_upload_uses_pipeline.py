@@ -40,7 +40,7 @@ M ySQL 不是 PDF，这里保留；Markdown 图片应被去掉。
 
 
 def main() -> int:
-    print("说明：user_ingest 只做 OSS 下载 + 调 chunks_from_path + 写 Chroma")
+    print("说明：user_ingest 只做 OSS 下载 + 调 chunks_from_path + 写 pgvector")
     print("      清洗/切块全部来自 common.document_pipeline\n")
 
     tmp = Path(tempfile.mkdtemp(prefix="demo_clean_"))

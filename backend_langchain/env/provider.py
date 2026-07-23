@@ -48,7 +48,9 @@ class Settings:
         )
         self.env = APP_ENV
         self.config = _get_config_snapshot()
-        self.mysql_config = self.config.get("mysql") or self.config.get("database") or {}
+        self.postgres_config = (
+            self.config.get("postgres") or self.config.get("database") or {}
+        )
         redis_cfg = self.config.get("redis")
         self.redis_config = None
         if isinstance(redis_cfg, dict) and redis_cfg:

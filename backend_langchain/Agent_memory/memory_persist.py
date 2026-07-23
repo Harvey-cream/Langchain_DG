@@ -1,4 +1,4 @@
-"""压缩摘要异步落 MySQL。"""
+"""压缩摘要异步落 Postgres conversation_summaries。"""
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
-from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from backend_langchain.logger_func import log_exception_event
 
@@ -45,7 +45,7 @@ def schedule_async_summary_persist(
         now = datetime.now(timezone.utc)
         try:
             async with SessionLocal() as session:
-                stmt = mysql_insert(ConversationSummary).values(
+                stmt = pg_insert(ConversationSummary).values(
                     user_id=ctx.user_id,
                     conversation_id=ctx.conversation_id,
                     kind=ctx.kind,
@@ -54,11 +54,14 @@ def schedule_async_summary_persist(
                     token_estimate=token_estimate,
                     updated_at=now,
                 )
-                stmt = stmt.on_duplicate_key_update(
-                    summary=stmt.inserted.summary,
-                    turn_count_at_compress=stmt.inserted.turn_count_at_compress,
-                    token_estimate=stmt.inserted.token_estimate,
-                    updated_at=stmt.inserted.updated_at,
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["kind", "conversation_id"],
+                    set_={
+                        "summary": stmt.excluded.summary,
+                        "turn_count_at_compress": stmt.excluded.turn_count_at_compress,
+                        "token_estimate": stmt.excluded.token_estimate,
+                        "updated_at": stmt.excluded.updated_at,
+                    },
                 )
                 await session.execute(stmt)
                 await session.commit()

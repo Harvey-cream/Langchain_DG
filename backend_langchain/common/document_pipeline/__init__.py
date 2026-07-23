@@ -1,7 +1,6 @@
 """文档入库流水线：清洗 → 切块 → 元数据（建库、预览、聊天附件共用）。"""
 from common.document_pipeline.chunk import (
     agent_markdown_chunks,
-    existing_source_paths,
     interview_pdf_chunks,
     load_markdown_documents,
     load_pdf_documents,
@@ -35,7 +34,6 @@ __all__ = [
     "clean_pdf_text",
     "clean_plain_text",
     "detect_format",
-    "existing_source_paths",
     "extract_pdf_pages",
     "extract_pdf_text",
     "extract_pdf_text_from_data_url",

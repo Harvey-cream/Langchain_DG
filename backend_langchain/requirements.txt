@@ -1,5 +1,5 @@
 # 生产 / Docker / 建库统一依赖（向量走 DashScope，不装 torch）。
-# 体积大头：chromadb（会拉 onnxruntime、kubernetes 等），RAG 必需。
+# 存储统一 PostgreSQL：业务库(asyncpg) + 向量库(pgvector) + LangGraph checkpoint(psycopg)。
 # 验证：APP_ENV=production python Scripts/verify_prod_imports.py
 # 本地 HuggingFace 嵌入（无 DASHSCOPE_API_KEY 时）另装 CPU 版 torch。
 
@@ -7,7 +7,10 @@ fastapi>=0.115.0,<1.0
 uvicorn>=0.32.0,<1.0
 gmssl==3.2.2
 PyJWT[crypto]==2.9.0
-asyncmy>=0.2.9,<1.0
+asyncpg>=0.30,<1.0
+psycopg[binary]>=3.2,<4.0
+psycopg-pool>=3.2,<4.0
+pgvector>=0.3,<0.5
 sqlalchemy[asyncio]>=2.0.36,<3.0
 pycryptodomex==3.23.0
 
@@ -16,11 +19,9 @@ langchain-openai>=1.1.12,<2.0
 langchain-community>=0.4.1,<0.5
 langchain-text-splitters>=1.1.1,<2.0
 langgraph>=1.1.5,<1.2
-langgraph-checkpoint-mysql[asyncmy]>=2.0.10,<4.0
+langgraph-checkpoint-postgres>=3.0.0,<4.0
 langchain-mcp-adapters>=0.2.2,<0.3
 mcp>=1.9.2,<2
-langchain-chroma>=1.0.0,<2.0
-chromadb>=1.3.5,<2.0
 
 python-dotenv
 PyYAML>=6.0.1,<7.0

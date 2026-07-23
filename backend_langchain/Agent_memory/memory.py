@@ -102,7 +102,7 @@ def _should_compress(*, total_turns: int, max_turns: int, token_count: int, toke
 # 主编排：maybe_compress_history
 #   Turn 触发 → total_turns > MEMORY_MAX_TURNS
 #   Token 触发 → token_count > MEMORY_TOKEN_BUDGET
-#   触发后共用：turn 边界裁剪 → LLM 摘要 → 写回 MySQL checkpoint → 可选业务摘要表
+#   触发后共用：turn 边界裁剪 → LLM 摘要 → 写回 Postgres checkpoint → 可选业务摘要表
 # ===========================================================================
 
 async def maybe_compress_history(
@@ -113,7 +113,7 @@ async def maybe_compress_history(
 ) -> None:
     """
     stream 前：按 turn 边界 + token 预算压缩；未完成 turn / interrupt 不压。
-    摘要写回 MySQL checkpoint；可选异步落 MySQL conversation_summaries。
+    摘要写回 Postgres checkpoint；可选异步落 conversation_summaries。
     """
     if not _memory_compression_enabled():
         return
@@ -233,7 +233,7 @@ async def maybe_compress_history(
         log_warning_event(logger, "memory_compress_summary_empty", thread_id=thread_id)
         return
 
-    # --- 共用：整表替换 checkpoint messages（MySQL）---
+    # --- 共用：整表替换 checkpoint messages（Postgres）---
     removes: list[Any] = []
     for m in messages:
         mid = getattr(m, "id", None)
@@ -268,7 +268,7 @@ async def maybe_compress_history(
         summary_chars=len(new_summary),
     )
 
-    # --- 共用：异步落 MySQL conversation_summaries ---
+    # --- 共用：异步落 Postgres conversation_summaries ---
     if memory is not None:
         schedule_async_summary_persist(
             memory,
