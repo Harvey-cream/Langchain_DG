@@ -16,7 +16,7 @@ langchain-openai>=1.1.12,<2.0
 langchain-community>=0.4.1,<0.5
 langchain-text-splitters>=1.1.1,<2.0
 langgraph>=1.1.5,<1.2
-langgraph-checkpoint-sqlite>=2.0.10,<3.0
+langgraph-checkpoint-mysql[asyncmy]>=2.0.10,<4.0
 langchain-mcp-adapters>=0.2.2,<0.3
 mcp>=1.9.2,<2
 langchain-chroma>=1.0.0,<2.0
@@ -24,8 +24,6 @@ chromadb>=1.3.5,<2.0
 
 python-dotenv
 PyYAML>=6.0.1,<7.0
-# 0.22+ 移除 Connection.is_alive，与 langgraph-checkpoint-sqlite 2.x 不兼容
-aiosqlite>=0.20.0,<0.22.0
 markdown>=3.5,<4.0
 fpdf2>=2.8.0,<3.0
 pdfplumber>=0.11.0,<1.0

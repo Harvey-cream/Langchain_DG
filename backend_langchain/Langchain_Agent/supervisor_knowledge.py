@@ -1,6 +1,6 @@
-"""企业知识库线总控 Graph：LLM 分诊 → 进入子 Agent 子图。
+"""企业知识库线总控 Graph：LLM 分诊 → 挂载各子 Agent 自有子图。
 
-不写长答案；子 Agent 定义见 knowledge_subagents。与面试线隔离。
+不写长答案；子 Agent 说明书见 knowledge_subagents。与面试线隔离。
 """
 from __future__ import annotations
 
@@ -14,16 +14,16 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from backend_langchain.logger_func import log_info_event, log_warning_event
-from common.agent import AgentState, build_agent_graph, get_checkpointer, message_content_to_text
-from common.skill_router import DOC_SUMMARY_SKILLS, KNOWLEDGE_QA_SKILLS
+from common.agent import AgentState, message_content_to_text
+from common.checkpointer import get_checkpointer
 from config.config import get_qwen_chat_model
+from Langchain_Agent.agents.doc_summary import build_doc_summary_graph
+from Langchain_Agent.agents.knowledge_qa import build_knowledge_qa_graph
 from Langchain_Agent.knowledge_subagents import (
     KNOWLEDGE_SUB_AGENTS,
     KnowledgeAgentId,
     render_sub_agents_for_router,
 )
-from Langchain_Agent.prompts_knowledge import AGENT_SYSTEM_PREFIX, SUMMARY_SYSTEM_PREFIX
-from Langchain_Agent.tools.knowledge import get_all_agent_tools, get_summary_tools
 
 logger = logging.getLogger(__name__)
 
@@ -49,44 +49,16 @@ def _latest_user_text(messages: list[BaseMessage]) -> str:
     return ""
 
 
-def _build_sub_agent_graph(
-    agent_id: KnowledgeAgentId,
-    *,
-    temperature: float,
-    enable_web_search: bool,
-) -> CompiledStateGraph:
-    if agent_id == "doc_summary":
-        return build_agent_graph(
-            tools=get_summary_tools(),
-            system_prompt=SUMMARY_SYSTEM_PREFIX,
-            recall_mode="main",
-            temperature=temperature,
-            streaming=True,
-            skills=DOC_SUMMARY_SKILLS,
-            use_checkpointer=False,
-        )
-    return build_agent_graph(
-        tools=get_all_agent_tools(enable_web_search=enable_web_search),
-        system_prompt=AGENT_SYSTEM_PREFIX,
-        recall_mode="main",
-        temperature=temperature,
-        streaming=True,
-        skills=KNOWLEDGE_QA_SKILLS,
-        use_checkpointer=False,
-    )
-
-
 def build_knowledge_supervisor_graph(
     *,
     temperature: float = 0.45,
     enable_web_search: bool = False,
 ) -> CompiledStateGraph:
     """编译知识库线总控：route(LLM) → doc_summary | knowledge_qa。"""
-    summary_graph = _build_sub_agent_graph(
-        "doc_summary", temperature=temperature, enable_web_search=False
-    )
-    qa_graph = _build_sub_agent_graph(
-        "knowledge_qa", temperature=temperature, enable_web_search=enable_web_search
+    summary_graph = build_doc_summary_graph(temperature=temperature)
+    qa_graph = build_knowledge_qa_graph(
+        temperature=temperature,
+        enable_web_search=enable_web_search,
     )
     agents_block = render_sub_agents_for_router(KNOWLEDGE_SUB_AGENTS)
     router_system = _ROUTER_SYSTEM.format(agents=agents_block)

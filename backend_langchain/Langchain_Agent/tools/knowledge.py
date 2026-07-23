@@ -22,9 +22,10 @@ def warmup_knowledge_stores() -> None:
         log_exception_event(logger, "warmup_knowledge_mcp_preload_failed")
 
 
-def _is_tavily_tool(tool_obj: object) -> bool:
+def _is_web_search_tool(tool_obj: object) -> bool:
+    """百炼 WebSearch MCP / 旧 Tavily 等联网搜索工具。"""
     name = str(getattr(tool_obj, "name", "") or "").strip().lower()
-    return "tavily" in name or "web_search" in name
+    return "tavily" in name or "web_search" in name or "websearch" in name
 
 
 def _mcp_tool_with_sync_invoke(tool: object) -> object:
@@ -60,13 +61,13 @@ def _mcp_tool_with_sync_invoke(tool: object) -> object:
 
 
 def get_all_agent_tools(*, enable_web_search: bool = False) -> list:
-    """知识问答 Agent：PDF HITL + MCP（可选联网）。"""
+    """知识问答 Agent：PDF HITL + MCP（联网由强制预搜注入，不挂给模型）。"""
     from common.tools import get_builtin_pdf_tools
     from MCP.mcp_multiserver import load_mcp_tools_once
 
+    _ = enable_web_search  # 兼容旧调用签名
     mcp_tools = [_mcp_tool_with_sync_invoke(t) for t in load_mcp_tools_once()]
-    if not enable_web_search:
-        mcp_tools = [t for t in mcp_tools if not _is_tavily_tool(t)]
+    mcp_tools = [t for t in mcp_tools if not _is_web_search_tool(t)]
     return get_builtin_pdf_tools() + mcp_tools
 
 

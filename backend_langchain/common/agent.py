@@ -1,7 +1,7 @@
-"""LangGraph Agent 核心：Workflow（skill_recall）+ Agent（model ↔ tools）、checkpoint、流式事件。
+"""LangGraph Agent 核心：图工厂、流式事件；面试线仍用 `build_agent_graph`。
 
-子 Agent 共用 `build_agent_graph`（可传入 skills catalog）；知识库/面试线在各自 runtime 组装。
-图结构：START → skill_recall → agent → tools → agent …
+知识库线子 Agent 已迁至 `Langchain_Agent/agents/*`。
+Checkpointer 见 `common.checkpointer`（此处再导出以兼容旧 import）。
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from typing import Annotated, Any, Literal
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.config import get_stream_writer
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
@@ -34,6 +33,13 @@ if __package__ in {None, ""}:
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
+from common.checkpointer import (
+    agent_checkpoint_thread_id,
+    close_checkpointer,
+    get_checkpointer,
+    init_checkpointer,
+    interview_checkpoint_thread_id,
+)
 from common.document_pipeline import extract_pdf_text_from_data_url
 from common.skill_router import SkillSpec, prepare_turn_context
 from config.config import QUERY_REWRITE_CONTEXT_TURNS, get_qwen_chat_model
@@ -41,46 +47,6 @@ from config.config import QUERY_REWRITE_CONTEXT_TURNS, get_qwen_chat_model
 RecallModeParam = Literal["main", "interview"]
 
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# Checkpointer（AsyncSqliteSaver，主/面试按 thread_id 分区共享一份）
-# =============================================================================
-
-CHECKPOINT_SQLITE_PATH = Path(__file__).resolve().parent / "data" / "langgraph_checkpoints.sqlite3"
-_checkpointer: AsyncSqliteSaver | None = None
-_checkpointer_ctx: Any = None
-
-
-async def init_checkpointer() -> AsyncSqliteSaver:
-    global _checkpointer, _checkpointer_ctx
-    if _checkpointer is None:
-        CHECKPOINT_SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _checkpointer_ctx = AsyncSqliteSaver.from_conn_string(str(CHECKPOINT_SQLITE_PATH))
-        _checkpointer = await _checkpointer_ctx.__aenter__()
-    return _checkpointer
-
-
-async def close_checkpointer() -> None:
-    global _checkpointer, _checkpointer_ctx
-    if _checkpointer_ctx is not None:
-        await _checkpointer_ctx.__aexit__(None, None, None)
-    _checkpointer = None
-    _checkpointer_ctx = None
-
-
-def get_checkpointer() -> AsyncSqliteSaver:
-    if _checkpointer is None:
-        raise RuntimeError("checkpointer 未初始化，请在应用 lifespan 中调用 init_checkpointer()")
-    return _checkpointer
-
-
-def agent_checkpoint_thread_id(user_id: int, conversation_id: int) -> str:
-    return f"agent:{user_id}:{conversation_id}"
-
-
-def interview_checkpoint_thread_id(user_id: int, conversation_id: int) -> str:
-    return f"interview:{user_id}:{conversation_id}"
 
 
 # =============================================================================
@@ -203,6 +169,7 @@ class AgentState(TypedDict):
     skill_name: str
     skill_context: str
     retrieved_context: str
+    web_context: str  # 用户开启联网搜索时强制检索注入；否则空
     next_agent: str  # 知识库总控写入；子图/面试可置空
 
 
@@ -349,6 +316,19 @@ def build_agent_graph(
 # =============================================================================
 
 
+def _split_astream_item(item: Any) -> tuple[Any, Any]:
+    """统一解包 astream 项。
+
+    - stream_mode 为列表且 subgraphs=False → (mode, data)
+    - stream_mode 为列表且 subgraphs=True  → (namespace, mode, data)
+    """
+    if isinstance(item, tuple) and len(item) == 3:
+        return item[1], item[2]
+    if isinstance(item, tuple) and len(item) == 2:
+        return item[0], item[1]
+    return None, item
+
+
 async def _compress_history_safely(
     agent: CompiledStateGraph,
     thread_id: str,
@@ -370,7 +350,10 @@ async def stream_graph_chat_model_events(
     attachments: list[dict] | None = None,
     memory: MemoryTurnContext | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """流式产出事件：delta / status / interrupt / pdf_ready（custom + updates）。"""
+    """流式产出事件：delta / status / web_sources / interrupt / pdf_ready（custom + updates）。
+
+    总控挂载子图时必须 subgraphs=True，否则子图内 get_stream_writer 的 delta 到不了前端。
+    """
     if resume_pdf is not None:
         graph_input: Any = Command(resume=resume_pdf)
     else:
@@ -380,6 +363,7 @@ async def stream_graph_chat_model_events(
             "skill_name": "",
             "skill_context": "",
             "retrieved_context": "",
+            "web_context": "",
             "next_agent": "",
         }
 
@@ -389,13 +373,19 @@ async def stream_graph_chat_model_events(
     if attachments:
         config["configurable"]["attachments"] = attachments
 
-    async for mode, payload in agent.astream(
-        graph_input, config, stream_mode=["custom", "updates"]
+    async for item in agent.astream(
+        graph_input,
+        config,
+        stream_mode=["custom", "updates"],
+        subgraphs=True,
     ):
+        mode, payload = _split_astream_item(item)
         if mode == "custom" and isinstance(payload, dict):
             t = payload.get("type")
             if t in ("status", "delta") and payload.get("text") is not None:
                 yield {"type": t, "text": str(payload["text"])}
+            elif t == "web_sources" and isinstance(payload.get("sources"), list):
+                yield {"type": "web_sources", "sources": payload["sources"]}
             elif t == "pdf_ready" and payload.get("url"):
                 key = (str(payload["url"]), str(payload.get("filename") or "export.pdf"))
                 if key in seen_pdf:

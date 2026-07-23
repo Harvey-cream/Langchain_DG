@@ -152,11 +152,18 @@ export function estimateChatStreamPayloadBytes(
   ]).size;
 }
 
+export type WebSource = {
+  title: string;
+  url: string;
+};
+
 export type ChatStreamCallbacks = {
   onMeta?: (data: StreamMeta) => void;
   onDelta?: (text: string) => void;
   /** 如「🔍 查询中」；可选，未实现则忽略 */
   onStatus?: (text: string) => void;
+  /** 强制联网搜索回来的网页来源 */
+  onWebSources?: (sources: WebSource[]) => void;
   onPing?: () => void;
   /** LangGraph interrupt：PDF 确认等 */
   onInterrupt?: (data: PdfInterruptPayload) => void;
@@ -317,6 +324,17 @@ async function chatWithStreamAt(
           callbacks.onPing?.();
         } else if (t === 'status' && data.text != null) {
           callbacks.onStatus?.(data.text);
+        } else if (t === 'web_sources' && Array.isArray((data as { sources?: unknown }).sources)) {
+          const raw = (data as { sources: Array<{ title?: unknown; url?: unknown }> }).sources;
+          const sources: WebSource[] = raw
+            .map(s => ({
+              title: String(s?.title ?? '').trim() || String(s?.url ?? ''),
+              url: String(s?.url ?? '').trim(),
+            }))
+            .filter(s => s.url);
+          if (sources.length) {
+            callbacks.onWebSources?.(sources);
+          }
         } else if (t === 'delta' && data.text != null) {
           const chunk = data.text;
           if (typeof localStorage !== 'undefined' && localStorage.getItem('DEBUG_STREAM') === '1') {

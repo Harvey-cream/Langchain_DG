@@ -3,9 +3,10 @@ from __future__ import annotations
 import secrets
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.types import JSON
 
 
 class Base(DeclarativeBase):
@@ -45,6 +46,8 @@ class UserConversation(Base):
 
 
 class UserSession(Base):
+    """一轮问答。开流 status=generating；结束后一次事务写 content/token/status=completed。"""
+
     __tablename__ = "user_sessions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -54,6 +57,26 @@ class UserSession(Base):
     )
     question: Mapped[str] = mapped_column(Text)
     ai_response: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="completed", index=True)
+    token_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), server_default=func.now()
+    )
+
+
+class AgentWebSource(Base):
+    """知识库会话联网来源：一轮 session 对应一条 JSON 列表。"""
+
+    __tablename__ = "agent_web_sources"
+    __table_args__ = (UniqueConstraint("session_id", name="uq_agent_web_sources_session"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("user_sessions.id"))
+    conversation_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("user_conversations.id"), nullable=True, index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), index=True)
+    sources_json: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), server_default=func.now()
     )
@@ -86,6 +109,8 @@ class InterviewSession(Base):
     )
     question: Mapped[str] = mapped_column(Text)
     ai_response: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="completed", index=True)
+    token_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), server_default=func.now()
     )

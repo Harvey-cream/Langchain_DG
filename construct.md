@@ -17,7 +17,7 @@
                     ┌────── 共用底座 ──────┐
                     │ skill_recall→agent   │
                     │ RAG · MCP · PDF      │
-                    │ 会话记忆 SQLite      │
+                    │ 会话记忆 MySQL ckpt  │
                     └──────────┬───────────┘
                                │ 流式结束后异步
                                ▼
@@ -58,7 +58,7 @@
 - **线内顶层路由（Supervisor）**：企业知识库线、面试线各有一个**路由型顶层 Graph**（LLM 阅读子 Agent 定义 → 选线内子图，不写长答案）。知识库线实现见 `supervisor_knowledge`；禁止关键词硬编码分诊。
 - **两条线严禁串联**：两边顶层互不调用、不共用一张总控图；前端分入口，只共用底座（图工厂 / RAG / SSE 等）。线内子 Agent 可串联（如面试 `JD → 模拟 → 评估`），跨线不可。
 - **Memory Agent**：异步后置，挂在主回复之后，不并入任一线路由顶层。
-- **子 Agent 定义**：每个子 Agent 有独立说明书（职责 / 何时用 / 何时不用），交给总控 LLM；子图自身仍可有 Skill 集。
+- **子 Agent 定义**：每个子 Agent 有独立说明书（职责 / 何时用 / 何时不用），交给总控 LLM；**各自独立子图**（自有节点与边，见 `Langchain_Agent/agents/`），图内仍可有 Skill 集。
 
 ## Agent 说明
 
@@ -69,7 +69,7 @@
 | **LangGraph** | `skill_recall → agent ↔ tools`，子 Agent 共用图工厂 |
 | **Skill 路由** | 向量匹配意图 + 约束输出结构（每 Agent 独立 Skill 集） |
 | **RAG** | Chroma；用户库 `user_knowledge` 与面试库 `knowledge` 隔离 |
-| **会话记忆** | SQLite checkpoint；超阈值压缩（摘要 + 保留近几轮） |
+| **会话记忆** | MySQL checkpoint（独立库）；超阈值压缩（摘要 + 保留近几轮） |
 | **SSE** | 流式对话；附件当轮临时注入，不落库 |
 
 ---

@@ -12,6 +12,8 @@ mysql:
   host: "${MYSQL_HOST:-localhost}"
   port: 3306
   database: "${MYSQL_DATABASE:-langchain}"
+  # LangGraph checkpoint 独立库（与业务库分库）
+  checkpoint_database: "${MYSQL_CHECKPOINT_DATABASE:-langchain_checkpoint}"
   user: root
   password: "${MYSQL_PASSWORD:-root}"
 

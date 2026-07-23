@@ -9,6 +9,7 @@ services:
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-authentication-plugin=mysql_native_password
     restart: always
     environment:
+      # 业务库；checkpoint 独立库 langchain_checkpoint 由应用启动时 CREATE（勿用第二套 MYSQL_DATABASE）
       MYSQL_DATABASE: ${MYSQL_DATABASE:-langchain}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
     volumes:
@@ -44,6 +45,8 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-production}
       MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      # 与 settings_pro.yaml mysql.checkpoint_database 对应；库由 init_checkpointer 自动创建
+      MYSQL_CHECKPOINT_DATABASE: ${MYSQL_CHECKPOINT_DATABASE:-langchain_checkpoint}
       # 以下由 .env 注入，供 settings_pro.yaml 中 ${OPENAI_API_KEY} 等插值
       # OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL
       # DASHSCOPE_API_KEY / APP_SECRET_KEY / APP_ALLOWED_HOST

@@ -13,6 +13,7 @@ mysql:
   host: db
   port: 3306
   database: "${MYSQL_DATABASE:-langchain}"
+  checkpoint_database: "${MYSQL_CHECKPOINT_DATABASE:-langchain_checkpoint}"
   user: root
   password: "${MYSQL_PASSWORD:-root}"
 

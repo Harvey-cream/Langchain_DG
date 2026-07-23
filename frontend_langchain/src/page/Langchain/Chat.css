@@ -790,6 +790,72 @@
   opacity: 0.6;
 }
 
+.chat-web-sources-collapse {
+  margin: 0 0 10px;
+  max-width: min(520px, 100%);
+}
+
+.chat-web-sources-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #8b95a8;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+
+.chat-web-sources-summary:hover {
+  color: #5b6577;
+}
+
+.chat-web-sources-chevron {
+  font-size: 10px;
+  transition: transform 0.18s ease;
+}
+
+.chat-web-sources-collapse.is-open .chat-web-sources-chevron {
+  transform: rotate(180deg);
+}
+
+.chat-web-sources-list {
+  margin: 8px 0 0;
+  padding: 8px 10px 8px 28px;
+  list-style: decimal;
+  border-radius: 10px;
+  background: #f7f8fa;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.chat-web-sources-list li {
+  margin: 0;
+  padding: 4px 0;
+  color: #64748b;
+  font-size: 12.5px;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.chat-web-sources-list li + li {
+  border-top: 1px solid #eef0f3;
+}
+
+.chat-web-sources-list a {
+  color: #3b82f6;
+  text-decoration: none;
+}
+
+.chat-web-sources-list a:hover {
+  text-decoration: underline;
+  color: #2563eb;
+}
+
 .chat-interview-track-row {
   display: flex;
   align-items: center;

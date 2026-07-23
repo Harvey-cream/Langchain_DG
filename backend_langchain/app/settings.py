@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
 import yaml
 from dotenv import load_dotenv
@@ -221,10 +222,20 @@ MYSQL_PASSWORD = str(_mysql.get("password") or "root")
 MYSQL_HOST = str(_mysql.get("host") or "localhost")
 MYSQL_PORT = str(_mysql.get("port") or "3306")
 MYSQL_DATABASE = str(_mysql.get("database") or "langchain")
+# LangGraph checkpoint 独立库（与业务库分库）
+MYSQL_CHECKPOINT_DATABASE = str(
+    _mysql.get("checkpoint_database") or os.getenv("MYSQL_CHECKPOINT_DATABASE") or "langchain_checkpoint"
+).strip() or "langchain_checkpoint"
 
 DATABASE_URL = (
     f"mysql+asyncmy://{MYSQL_USER}:{MYSQL_PASSWORD}"
     f"@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}?charset=utf8mb4"
+)
+
+# AsyncMySaver 使用 mysql://（非 SQLAlchemy 方言）
+CHECKPOINT_MYSQL_URL = (
+    f"mysql://{quote_plus(MYSQL_USER)}:{quote_plus(MYSQL_PASSWORD)}"
+    f"@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_CHECKPOINT_DATABASE}"
 )
 
 # --- 应用 ---

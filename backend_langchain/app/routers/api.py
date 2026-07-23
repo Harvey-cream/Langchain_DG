@@ -22,7 +22,9 @@ from common.extend import (
     schedule_async_title_polish,
 )
 from common.stream import (
+    SESSION_STATUS_GENERATING,
     iter_sse_chat,
+    load_web_sources_by_session_ids,
     parse_bool_flag,
     parse_resume_pdf,
     session_message_rows,
@@ -70,7 +72,11 @@ async def list_or_messages(
             s = result.scalar_one_or_none()
             if not s:
                 return fail("消息不存在")
-            return ok("获取会话消息成功", {"messages": session_message_rows([s])})
+            sources = await load_web_sources_by_session_ids(db, [int(s.id)])
+            return ok(
+                "获取会话消息成功",
+                {"messages": session_message_rows([s], sources_by_session=sources)},
+            )
         result = await db.execute(
             select(UserSession)
             .where(
@@ -79,7 +85,12 @@ async def list_or_messages(
             )
             .order_by(UserSession.created_at)
         )
-        return ok("获取会话消息成功", {"messages": session_message_rows(list(result.scalars()))})
+        sessions = list(result.scalars())
+        sources = await load_web_sources_by_session_ids(db, [int(s.id) for s in sessions])
+        return ok(
+            "获取会话消息成功",
+            {"messages": session_message_rows(sessions, sources_by_session=sources)},
+        )
 
     result = await db.execute(
         select(UserConversation)
@@ -164,6 +175,7 @@ async def chat_stream(
         conversation_id=conversation.id,
         question=msg_text,
         ai_response="",
+        status=SESSION_STATUS_GENERATING,
     )
     db.add(session_obj)
     await db.commit()

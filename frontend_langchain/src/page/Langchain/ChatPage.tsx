@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Modal, message } from 'antd';
-import { CloseOutlined, CopyOutlined, PaperClipOutlined } from '@ant-design/icons';
+import { CloseOutlined, CopyOutlined, DownOutlined, PaperClipOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import { createRoot, type Root } from 'react-dom/client';
 import remarkGfm from 'remark-gfm';
@@ -17,6 +17,7 @@ import {
   MAX_CHAT_STREAM_PAYLOAD_BYTES,
   PAYLOAD_TOO_LARGE_MESSAGE,
   type ChatAttachment,
+  type WebSource,
 } from '../../services/chatStream';
 import ChatSidebar, { ConversationItem } from './ChatSidebar';
 import './Chat.css';
@@ -27,6 +28,8 @@ export interface Message {
   isUser: boolean;
   timestamp: string;
   attachments?: ChatAttachment[];
+  /** 本轮强制联网搜索回来的来源（仅助手消息） */
+  webSources?: WebSource[];
 }
 
 export type ChatPageProps = {
@@ -78,6 +81,7 @@ type ChatViewProps = {
   onPdfExportCancel: () => void;
   inputLocked: boolean;
   loadingStatusText?: string | null;
+  webSources?: WebSource[];
 };
 
 /** 网络层 delta 合并：防重复片段、累计全文、后缀重叠去重 */
@@ -95,6 +99,64 @@ function mergeStreamingDelta(previous: string, incoming: string): string {
     }
   }
   return prev + next;
+}
+
+const _JUNK_URL_EXT = /\.(png|jpe?g|gif|webp|svg|ico|css|js|woff2?)(\?|#|$)/i;
+const _JUNK_HOST = /(alicdn\.com|cdn\.|static\.|\.img\.|img\.|\.cloudfront\.|googleapis\.com\/.*\/image)/i;
+
+function sanitizeWebSources(sources: WebSource[]): WebSource[] {
+  const seen = new Set<string>();
+  const out: WebSource[] = [];
+  for (const s of sources) {
+    const url = (s.url || '').trim();
+    if (!url || seen.has(url)) continue;
+    if (_JUNK_URL_EXT.test(url) || _JUNK_HOST.test(url)) continue;
+    seen.add(url);
+    out.push({ title: (s.title || '').trim() || url, url });
+  }
+  return out;
+}
+
+function webSourceLabel(s: WebSource): string {
+  const title = (s.title || '').trim();
+  if (title && title !== s.url && !/^https?:\/\//i.test(title)) {
+    return title.length > 72 ? `${title.slice(0, 72)}…` : title;
+  }
+  try {
+    return new URL(s.url).hostname.replace(/^www\./, '');
+  } catch {
+    return s.url;
+  }
+}
+
+function WebSourcesCollapse({ sources }: { sources: WebSource[] }) {
+  const [open, setOpen] = useState(false);
+  const list = sanitizeWebSources(sources);
+  if (!list.length) return null;
+  return (
+    <div className={`chat-web-sources-collapse ${open ? 'is-open' : ''}`}>
+      <button
+        type="button"
+        className="chat-web-sources-summary"
+        aria-expanded={open}
+        onClick={() => setOpen(v => !v)}
+      >
+        <span>参考 {list.length} 篇资料</span>
+        <DownOutlined className="chat-web-sources-chevron" />
+      </button>
+      {open ? (
+        <ol className="chat-web-sources-list">
+          {list.map((s, i) => (
+            <li key={`${s.url}-${i}`}>
+              <a href={s.url} target="_blank" rel="noopener noreferrer" title={s.url}>
+                {webSourceLabel(s)}
+              </a>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </div>
+  );
 }
 
 function extractPlainText(node: React.ReactNode): string {
@@ -278,6 +340,7 @@ const ChatView: React.FC<ChatViewProps> = ({
   onPdfExportCancel,
   inputLocked,
   loadingStatusText,
+  webSources,
 }) => {
   return (
     <div className="chat-layout">
@@ -341,6 +404,16 @@ const ChatView: React.FC<ChatViewProps> = ({
                     </>
                   ) : (
                     <>
+                      {(msg.webSources && msg.webSources.length > 0) ||
+                      (streamThis && webSources && webSources.length > 0) ? (
+                        <WebSourcesCollapse
+                          sources={
+                            msg.webSources && msg.webSources.length > 0
+                              ? msg.webSources
+                              : webSources || []
+                          }
+                        />
+                      ) : null}
                       {streamThis ? (
                         <>
                           <div
@@ -411,6 +484,9 @@ const ChatView: React.FC<ChatViewProps> = ({
           {isLoading && (
             <div className="message ai-message">
               <div className="message-content">
+                {webSources && webSources.length > 0 ? (
+                  <WebSourcesCollapse sources={webSources} />
+                ) : null}
                 {loadingStatusText ? (
                   <span className="chat-stream-progress-text">{loadingStatusText}</span>
                 ) : null}
@@ -511,6 +587,8 @@ const ChatPage: React.FC<ChatPageProps> = ({
   const [conversationId, setConversationId] = useState<number | undefined>(undefined);
   const [enableWebSearch, setEnableWebSearch] = useState(false);
   const [loadingStatusText, setLoadingStatusText] = useState<string | null>(null);
+  const [webSources, setWebSources] = useState<WebSource[]>([]);
+  const pendingWebSourcesRef = useRef<WebSource[]>([]);
   const [pdfExportPrompt, setPdfExportPrompt] = useState<{ kind: string; message: string } | null>(null);
   const [pdfExportHostMessageId, setPdfExportHostMessageId] = useState<string | null>(null);
   const [userDisplayTag, setUserDisplayTag] = useState<string | null>(null);
@@ -831,28 +909,46 @@ const ChatPage: React.FC<ChatPageProps> = ({
       const history = response?.data?.messages || [];
       const mapped: Message[] = [];
 
-      history.forEach((item: { id: number; question: string; ai_response: string; created_at: string }) => {
-        mapped.push({
-          id: `u-${item.id}`,
-          content: item.question,
-          isUser: true,
-          timestamp: item.created_at,
-        });
-        const reply = String(item.ai_response ?? '').trim();
-        if (reply) {
+      history.forEach(
+        (item: {
+          id: number;
+          question: string;
+          ai_response: string;
+          created_at: string;
+          web_sources?: WebSource[];
+          status?: string;
+        }) => {
           mapped.push({
-            id: `a-${item.id}`,
-            content: reply,
-            isUser: false,
+            id: `u-${item.id}`,
+            content: item.question,
+            isUser: true,
             timestamp: item.created_at,
           });
+          const reply = String(item.ai_response ?? '').trim();
+          const sources = Array.isArray(item.web_sources)
+            ? item.web_sources.filter(s => s?.url)
+            : undefined;
+          // generating 且尚无正文：开流占位，刷新时跳过助手气泡
+          if (item.status === 'generating' && !reply) {
+            return;
+          }
+          if (reply || (sources && sources.length > 0)) {
+            mapped.push({
+              id: `a-${item.id}`,
+              content: reply,
+              isUser: false,
+              timestamp: item.created_at,
+              webSources: sources?.length ? sources : undefined,
+            });
+          }
         }
-      });
-
+      );
       setConversationId(selectedConversationId);
       persistActiveConversationId(selectedConversationId);
       setPdfExportPrompt(null);
       setPdfExportHostMessageId(null);
+      setWebSources([]);
+      pendingWebSourcesRef.current = [];
       setMessages(mapped.length ? mapped : [welcomeMessage]);
     } catch {
       return;
@@ -864,6 +960,8 @@ const ChatPage: React.FC<ChatPageProps> = ({
     persistActiveConversationId(undefined);
     setPdfExportPrompt(null);
     setPdfExportHostMessageId(null);
+    setWebSources([]);
+    pendingWebSourcesRef.current = [];
     setMessages([welcomeMessage]);
   };
 
@@ -1013,6 +1111,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
             content: '',
             isUser: false,
             timestamp: new Date().toLocaleTimeString(),
+            webSources: pendingWebSourcesRef.current.length
+              ? [...pendingWebSourcesRef.current]
+              : undefined,
           },
         ]);
         scheduleStreamFlush();
@@ -1037,6 +1138,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
             content: line.trim(),
             isUser: false,
             timestamp: new Date().toLocaleTimeString(),
+            webSources: pendingWebSourcesRef.current.length
+              ? [...pendingWebSourcesRef.current]
+              : undefined,
           },
         ]);
       } else {
@@ -1062,6 +1166,19 @@ const ChatPage: React.FC<ChatPageProps> = ({
       if (!isCurrentStreamConversation()) return;
       setLoadingStatusText(text);
     },
+    onWebSources: (sources: WebSource[]) => {
+      if (!isCurrentStreamConversation()) return;
+      const cleaned = sanitizeWebSources(sources);
+      pendingWebSourcesRef.current = cleaned;
+      setWebSources(cleaned);
+      setLoadingStatusText(null);
+      const mid = streamingMsgIdRef.current;
+      if (mid && cleaned.length) {
+        setMessages(prev =>
+          prev.map(m => (m.id === mid ? { ...m, webSources: cleaned } : m))
+        );
+      }
+    },
     onInterrupt: (p: { kind: string; message: string }) => {
       sawInterruptRef.current = true;
       const existingId = streamingMsgIdRef.current;
@@ -1081,6 +1198,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
             content: '',
             isUser: false,
             timestamp: new Date().toLocaleTimeString(),
+            webSources: pendingWebSourcesRef.current.length
+              ? [...pendingWebSourcesRef.current]
+              : undefined,
           },
         ]);
         setPdfExportHostMessageId(newId);
@@ -1183,6 +1303,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
     setPendingAttachments([]);
     setIsLoading(true);
     setLoadingConversationId(startConversationId);
+    setWebSources([]);
+    pendingWebSourcesRef.current = [];
+    setLoadingStatusText(enableWebSearch ? '正在联网搜索...' : null);
 
     const streamConversationIdRef = { current: startConversationId as number | undefined };
     const streamingMsgIdRef = { current: null as string | null };
@@ -1214,6 +1337,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
             content: '（模型未返回内容）',
             isUser: false,
             timestamp: new Date().toLocaleTimeString(),
+            webSources: pendingWebSourcesRef.current.length
+              ? [...pendingWebSourcesRef.current]
+              : undefined,
           },
         ]);
       }
@@ -1476,6 +1602,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
         onPdfExportCancel={() => void handlePdfResume(false)}
         inputLocked={streamActive || !!pdfExportPrompt}
         loadingStatusText={loadingStatusText}
+        webSources={webSources}
       />
     </div>
   );

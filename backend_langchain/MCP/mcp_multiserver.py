@@ -7,6 +7,9 @@
 3. 若以上均未设置：自动读取 backend_langchain/MCP/mcp_servers.json（存在则加载）。
 
 请将 MCP/mcp_servers.example.json 复制为 MCP/mcp_servers.json，写入真实 Token（该文件已 .gitignore）。
+联网搜索由 common/web_search.forced_web_search 直连百炼 WebSearch MCP（DASHSCOPE_API_KEY），
+不必再把 websearch 配进本文件；若仍配置会当作普通 MCP 工具加载（知识问答 Agent 会过滤掉）。
+配置字符串支持 ${ENV} 展开；名为 tavily 的项会被忽略。
 Authorization 必须是 "Bearer ghp_xxxx" 这种形式，不要把令牌包在 < > 里，否则远端会 400。
 GitHub 远程 MCP文档：https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md
 Gitee：https://help.gitee.com/ai-productivity/mcp-server
@@ -22,6 +25,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -33,10 +37,37 @@ _mcp_tools_cache: list[Any] | None = None
 _mcp_load_attempted = False
 _mcp_lock = threading.Lock()
 _DEFAULT_MCP_CONFIG = "MCP/mcp_servers.json"
+_ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def _backend_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def _expand_env_vars(value: Any) -> Any:
+    """递归展开 ${VAR}；未设置的变量保持原样。"""
+    if isinstance(value, str):
+        return _ENV_VAR_RE.sub(lambda m: os.getenv(m.group(1), m.group(0)), value)
+    if isinstance(value, dict):
+        return {k: _expand_env_vars(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env_vars(v) for v in value]
+    return value
+
+
+def _normalize_connections(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """忽略 tavily / websearch（联网走 forced_web_search）；展开环境变量。"""
+    skip = {"tavily", "websearch", "web_search"}
+    skipped = {str(k).strip().lower() for k in data} & skip
+    if skipped:
+        logger.info("MCP：已忽略 %s（联网搜索由 forced_web_search + DASHSCOPE_API_KEY 负责）", ",".join(sorted(skipped)))
+
+    conns = {
+        str(name).strip(): dict(cfg)
+        for name, cfg in data.items()
+        if isinstance(cfg, dict) and str(name).strip().lower() not in skip
+    }
+    return _expand_env_vars(conns)
 
 
 def _read_connections() -> dict[str, dict[str, Any]] | None:
@@ -59,11 +90,15 @@ def _read_connections() -> dict[str, dict[str, Any]] | None:
             data = json.loads(default_path.read_text(encoding="utf-8"))
             logger.info("MCP：已加载默认配置 %s", default_path)
         else:
-            return None
-    if not isinstance(data, dict) or not data:
-        logger.warning("MCP 配置须为非空 JSON 对象（服务器名 -> 连接参数）")
+            data = {}
+    if not isinstance(data, dict):
+        logger.warning("MCP 配置须为 JSON 对象（服务器名 -> 连接参数）")
         return None
-    return data
+    conns = _normalize_connections(data)
+    if not conns:
+        logger.warning("MCP：无可用服务端连接（可配置 mcp_servers.json 或设置 DASHSCOPE_API_KEY）")
+        return None
+    return conns
 
 
 async def _async_load_tools(connections: dict[str, dict[str, Any]]) -> list[Any]:

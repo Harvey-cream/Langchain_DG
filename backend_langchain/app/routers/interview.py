@@ -20,6 +20,7 @@ from common.extend import (
     schedule_async_title_polish,
 )
 from common.stream import (
+    SESSION_STATUS_GENERATING,
     iter_sse_chat,
     parse_resume_pdf,
     session_message_rows,
@@ -163,6 +164,7 @@ async def chat_stream(
         conversation_id=conversation.id,
         question=msg_text,
         ai_response="",
+        status=SESSION_STATUS_GENERATING,
     )
     db.add(session_obj)
     await db.commit()
