@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import require_user
-from app.models import InterviewConversation, InterviewSession, User
+from app.models import ConversationSummary, InterviewConversation, InterviewSession, User
 from app.response import fail, ok
 from app.utils import format_datetime
 from common.agent import interview_checkpoint_thread_id
@@ -250,6 +250,16 @@ async def delete_conversation(
     conv = result.scalar_one_or_none()
     if not conv:
         return fail("会话不存在")
+    # 先删子表，再删对话（无 ON DELETE CASCADE）
+    await db.execute(
+        delete(ConversationSummary).where(
+            ConversationSummary.kind == "interview",
+            ConversationSummary.conversation_id == cid,
+        )
+    )
+    await db.execute(
+        delete(InterviewSession).where(InterviewSession.conversation_id == cid)
+    )
     await db.delete(conv)
     await db.commit()
     return ok("删除成功")

@@ -6,12 +6,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import require_user
-from app.models import User, UserConversation, UserSession
+from app.models import AgentWebSource, ConversationSummary, User, UserConversation, UserSession
 from app.response import fail, ok
 from app.utils import format_datetime
 from backend_langchain.logger_func import make_trace_event_logger
@@ -270,6 +270,23 @@ async def delete_conversation(
     conv = result.scalar_one_or_none()
     if not conv:
         return fail("会话不存在")
+    # 先删子表，再删对话（无 ON DELETE CASCADE）
+    session_ids = select(UserSession.id).where(UserSession.conversation_id == cid)
+    await db.execute(
+        delete(AgentWebSource).where(
+            or_(
+                AgentWebSource.conversation_id == cid,
+                AgentWebSource.session_id.in_(session_ids),
+            )
+        )
+    )
+    await db.execute(
+        delete(ConversationSummary).where(
+            ConversationSummary.kind == "main",
+            ConversationSummary.conversation_id == cid,
+        )
+    )
+    await db.execute(delete(UserSession).where(UserSession.conversation_id == cid))
     await db.delete(conv)
     await db.commit()
     return ok("删除成功")
