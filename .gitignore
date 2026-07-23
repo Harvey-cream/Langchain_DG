@@ -94,11 +94,6 @@ backend_langchain/env/settings_debug.yaml
 backend_langchain/config/mcp_servers.json
 backend_langchain/MCP/mcp_servers.json
 
-# LangGraph SQLite checkpoint（按会话 thread_id 持久化，本地/线上会话不同，勿提交）
-backend_langchain/common/data/langgraph_checkpoints.sqlite3
-backend_langchain/common/data/langgraph_checkpoints.sqlite3-shm
-backend_langchain/common/data/langgraph_checkpoints.sqlite3-wal
-
 # Chroma 向量库（本地已向量化产物，勿提交；线上 build_rag_knowledge.py 从 docs1/docs2 重建）
 backend_langchain/Langchain_knowledge/chroma/
 backend_langchain/Langchain_knowledge/chroma_db/

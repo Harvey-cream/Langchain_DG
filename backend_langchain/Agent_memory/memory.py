@@ -102,7 +102,7 @@ def _should_compress(*, total_turns: int, max_turns: int, token_count: int, toke
 # 主编排：maybe_compress_history
 #   Turn 触发 → total_turns > MEMORY_MAX_TURNS
 #   Token 触发 → token_count > MEMORY_TOKEN_BUDGET
-#   触发后共用：turn 边界裁剪 → LLM 摘要 → 写回 SQLite → 可选 MySQL
+#   触发后共用：turn 边界裁剪 → LLM 摘要 → 写回 MySQL checkpoint → 可选业务摘要表
 # ===========================================================================
 
 async def maybe_compress_history(
@@ -113,7 +113,7 @@ async def maybe_compress_history(
 ) -> None:
     """
     stream 前：按 turn 边界 + token 预算压缩；未完成 turn / interrupt 不压。
-    摘要写回 SQLite checkpoint；可选异步落 MySQL conversation_summaries。
+    摘要写回 MySQL checkpoint；可选异步落 MySQL conversation_summaries。
     """
     if not _memory_compression_enabled():
         return
@@ -233,7 +233,7 @@ async def maybe_compress_history(
         log_warning_event(logger, "memory_compress_summary_empty", thread_id=thread_id)
         return
 
-    # --- 共用：整表替换 checkpoint messages（SQLite）---
+    # --- 共用：整表替换 checkpoint messages（MySQL）---
     removes: list[Any] = []
     for m in messages:
         mid = getattr(m, "id", None)
