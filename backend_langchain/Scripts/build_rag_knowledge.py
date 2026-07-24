@@ -21,9 +21,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from common.document_pipeline import agent_markdown_chunks, interview_pdf_chunks
-from common.pgvector_store import PgVectorStore
-from common.rag import get_store
+from app.services.document_pipeline import agent_markdown_chunks, interview_pdf_chunks
+from agent.rag.pgvector_store import PgVectorStore
+from agent.rag.rag import get_store
 from config.config import (
     CORPUS_AGENT,
     CORPUS_INTERVIEW,

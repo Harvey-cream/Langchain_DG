@@ -92,17 +92,17 @@ backend_langchain/env/settings_debug.yaml
 
 # MCP 服务端密钥（从 mcp_servers.example.json 复制并填写）
 backend_langchain/config/mcp_servers.json
-backend_langchain/MCP/mcp_servers.json
+backend_langchain/agent/mcp/mcp_servers.json
 
 # Chroma 旧目录（已迁 pgvector，若本地仍有残留目录勿提交）
-backend_langchain/Langchain_knowledge/chroma/
-backend_langchain/Langchain_knowledge/chroma_db/
+backend_langchain/knowledge/chroma/
+backend_langchain/knowledge/chroma_db/
 
 # 清洗/切块预览与基准输出（脚本生成，勿提交）
-backend_langchain/common/data/clean_chunk_preview/
-backend_langchain/common/data/cleanup_benchmark.json
+backend_langchain/app/data/runtime/clean_chunk_preview/
+backend_langchain/app/data/runtime/cleanup_benchmark.json
 
 # PDF 导出落盘与本地字体缓存（运行时生成）
 backend_langchain/media/
-backend_langchain/common/data/pdf_exports/
-backend_langchain/common/data/pdf_fonts/
+backend_langchain/app/data/runtime/pdf_exports/
+backend_langchain/app/data/runtime/pdf_fonts/

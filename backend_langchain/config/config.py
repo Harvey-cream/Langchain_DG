@@ -23,7 +23,7 @@ from app.settings import dashscope_config, llm_config, rag_config
 # 路径
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent.parent
-KNOWLEDGE_DIR_NAME = "Langchain_knowledge"
+KNOWLEDGE_DIR_NAME = "knowledge"
 
 _rag = rag_config()
 COLLECTION = _rag["collection"]

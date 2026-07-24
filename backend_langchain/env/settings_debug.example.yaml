@@ -10,7 +10,8 @@ app:
 
 postgres:
   host: "${POSTGRES_HOST:-localhost}"
-  port: 5432
+  # Docker compose 默认映射 POSTGRES_PUBLISH_PORT=5433；本机原生 PG 可改 .env POSTGRES_PORT=5432
+  port: "${POSTGRES_PORT:-5433}"
   database: "${POSTGRES_DATABASE:-langchain}"
   # LangGraph checkpoint 独立库（与业务库分库，同一实例）
   checkpoint_database: "${POSTGRES_CHECKPOINT_DATABASE:-langchain_checkpoint}"

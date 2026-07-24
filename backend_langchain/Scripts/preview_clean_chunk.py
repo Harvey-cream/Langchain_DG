@@ -1,5 +1,5 @@
 """
-清洗 + 切块效果预览：从知识库等目录抽 10 份代表性文件，导出到 common/data/clean_chunk_preview/。
+清洗 + 切块效果预览：从知识库等目录抽 10 份代表性文件，导出到 app/data/runtime/clean_chunk_preview/。
 
 用法（backend_langchain 目录）：
   python Scripts/preview_clean_chunk.py
@@ -22,10 +22,10 @@ for p in (_ROOT, _SCRIPTS):
 
 from langchain_core.documents import Document
 
-from common.document_pipeline.ingest import chunks_from_path, load_documents_for_path
+from app.services.document_pipeline.ingest import chunks_from_path, load_documents_for_path
 from config.config import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE, knowledge_root
 
-OUT_DIR = _ROOT / "common" / "data" / "clean_chunk_preview"
+OUT_DIR = _ROOT / "app" / "data" / "runtime" / "clean_chunk_preview"
 RAW_HEAD_CHARS = 2500
 
 
@@ -265,7 +265,7 @@ def _write_index(manifest: list[dict]) -> None:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="导出清洗切块预览到 common/data/clean_chunk_preview")
+    p = argparse.ArgumentParser(description="导出清洗切块预览到 app/data/runtime/clean_chunk_preview")
     p.add_argument(
         "--max-chunks",
         type=int,

@@ -1,8 +1,8 @@
 """验证生产运行时依赖是否齐全（含建库所需 langchain-community 等）。
 
 用法（backend_langchain 目录）：
-    APP_ENV=production .venv\\Scripts\\python.exe Scripts\\verify_prod_imports.py
-    .venv\\Scripts\\python.exe Scripts\\verify_prod_imports.py --list-installed-mb
+    APP_ENV=production .venv\\Scripts\\python.exe scripts\\verify_prod_imports.py
+    .venv\\Scripts\\python.exe scripts\\verify_prod_imports.py --list-installed-mb
 """
 from __future__ import annotations
 
@@ -28,24 +28,24 @@ PROD_IMPORTS: list[tuple[str, str]] = [
     ("app.routers.api", "Agent 路由"),
     ("app.routers.interview", "面试路由"),
     ("app.routers.user", "用户路由"),
-    ("common.agent", "LangGraph"),
-    ("common.stream", "SSE 流式"),
-    ("common.rag", "pgvector RAG"),
-    ("common.embedding", "DashScope 嵌入"),
-    ("common.skill_router", "Skill 路由"),
-    ("common.rag_gate", "RAG 门控"),
-    ("common.query_rewrite", "检索问句改写"),
-    ("common.rerank", "DashScope 精排"),
-    ("Langchain_Agent.runtime_knowledge", "知识库 Agent 运行时"),
-    ("Langchain_Agent.runtime_interview", "面试 Agent 运行时"),
-    ("Langchain_Agent.tools.knowledge", "工具装配"),
-    ("Langchain_Agent.tools.interview", "面试工具装配"),
-    ("common.tools", "内置工具 schema"),
-    ("human_in_the_loop.human_loop", "PDF interrupt 解析"),
-    ("human_in_the_loop.pdf_export_render", "PDF 渲染"),
-    ("MCP.mcp_multiserver", "MCP 客户端"),
-    ("User.utils.jwt_token", "JWT RS256"),
-    ("User.utils.sm2", "SM2 登录解密"),
+    ("agent.graph_factory", "LangGraph"),
+    ("agent.stream", "SSE 流式"),
+    ("agent.rag.rag", "pgvector RAG"),
+    ("agent.rag.embedding", "DashScope 嵌入"),
+    ("agent.rag.skill_router", "Skill 路由"),
+    ("agent.rag.rag_gate", "RAG 门控"),
+    ("agent.rag.query_rewrite", "检索问句改写"),
+    ("agent.rag.rerank", "DashScope 精排"),
+    ("agent.runtime.runtime_knowledge", "知识库 Agent 运行时"),
+    ("agent.runtime.runtime_interview", "面试 Agent 运行时"),
+    ("agent.tools.knowledge", "工具装配"),
+    ("agent.tools.interview", "面试工具装配"),
+    ("agent.tools.schema_tools", "内置工具 schema"),
+    ("agent.hitl.human_loop", "PDF interrupt 解析"),
+    ("agent.hitl.pdf_export_render", "PDF 渲染"),
+    ("agent.mcp.mcp_multiserver", "MCP 客户端"),
+    ("app.auth.jwt_token", "JWT RS256"),
+    ("app.auth.sm2", "SM2 登录解密"),
     ("config.config", "LLM 配置"),
 ]
 

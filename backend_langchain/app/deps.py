@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.models import User
-from User.utils.jwt_token import verify_token
+from app.auth.jwt_token import verify_token
 
 
 async def get_current_user(

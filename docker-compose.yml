@@ -58,7 +58,7 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - langgraph_data:/app/common/data
+      - langgraph_data:/app/app/data/runtime
       - huggingface_cache:/root/.cache/huggingface
       - ./media:/app/media
       - ./backend_langchain/env/settings_pro.yaml:/app/env/settings_pro.yaml:ro

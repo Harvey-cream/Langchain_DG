@@ -9,12 +9,12 @@ LOGGING = {
     },
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
-        "common.agent": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "common.embedding": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "common.skill_router": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "Langchain_Agent.tools": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "agent.graph_factory": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "agent.rag.embedding": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "agent.rag.skill_router": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "agent.tools": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "app.routers.api": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "MCP.mcp_multiserver": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "agent.mcp.mcp_multiserver": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "huggingface_hub": {"handlers": ["console"], "level": "CRITICAL", "propagate": False},
         "huggingface_hub.utils._http": {
             "handlers": ["console"],

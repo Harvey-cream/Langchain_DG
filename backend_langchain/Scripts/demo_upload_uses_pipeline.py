@@ -13,13 +13,13 @@ from dotenv import load_dotenv
 
 load_dotenv(_ROOT.parent / ".env")
 
-from common.document_pipeline.ingest import chunks_from_path, load_documents_for_path
-from common.oss_client import _bucket, build_object_key, object_exists
-from common.document_pipeline.user_ingest import (
+from app.services.document_pipeline.ingest import chunks_from_path, load_documents_for_path
+from app.services.oss_client import _bucket, build_object_key, object_exists
+from app.services.document_pipeline.user_ingest import (
     ingest_user_document_from_oss,
     purge_user_document,
 )
-from common.rag import search_hits
+from agent.rag.rag import search_hits
 from config.config import CORPUS_USER
 
 RAW_MD = """# 清洗效果演示

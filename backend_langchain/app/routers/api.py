@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -13,15 +12,15 @@ from app.db import get_db
 from app.deps import require_user
 from app.models import AgentWebSource, ConversationSummary, User, UserConversation, UserSession
 from app.response import fail, ok
-from app.utils import format_datetime
+from app.utils import format_datetime, utc_now_naive
 from backend_langchain.logger_func import make_trace_event_logger
-from common.agent import agent_checkpoint_thread_id
-from common.extend import (
+from agent.graph_factory import agent_checkpoint_thread_id
+from app.services.extend import (
     fallback_chat_title,
     polish_agent_conversation_title,
     schedule_async_title_polish,
 )
-from common.stream import (
+from agent.stream import (
     SESSION_STATUS_GENERATING,
     iter_sse_chat,
     load_web_sources_by_session_ids,
@@ -233,7 +232,7 @@ async def patch_conversation(
 
     if body.pinned is not None:
         conv.pinned = bool(body.pinned)
-        conv.pinned_at = datetime.now(timezone.utc) if conv.pinned else None
+        conv.pinned_at = utc_now_naive() if conv.pinned else None
 
     if body.title is None and body.pinned is None:
         return fail("请提供 title 或 pinned")

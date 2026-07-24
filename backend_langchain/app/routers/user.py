@@ -13,8 +13,8 @@ from app.deps import require_user
 from app.models import User, ensure_display_tag
 from app.response import fail, ok
 from app.utils import format_datetime
-from User.utils.jwt_token import create_token
-from User.utils.sm2 import request_handler
+from app.auth.jwt_token import create_token
+from app.auth.sm2 import request_handler
 
 router = APIRouter(prefix="/api/user", tags=["user"])
 

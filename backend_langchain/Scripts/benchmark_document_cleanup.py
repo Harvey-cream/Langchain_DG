@@ -27,7 +27,7 @@ for p in (_ROOT, _SCRIPTS):
 warnings.filterwarnings("ignore", message=".*FontBBox.*")
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
-from common.document_pipeline.ingest import chunks_from_path, load_documents_for_path
+from app.services.document_pipeline.ingest import chunks_from_path, load_documents_for_path
 from config.config import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE, knowledge_root
 from preview_clean_chunk import SAMPLES, SampleSpec
 
@@ -102,7 +102,7 @@ def _quality_notes(spec: SampleSpec, raw: str | None, cleaned: str, chunks: list
         notes.append("依赖版本 <1.0 保留" if ok else "依赖版本 <1.0 丢失")
 
     if spec.fmt == "pdf":
-        from common.document_pipeline.cleanup import is_pdf_question_line
+        from app.services.document_pipeline.cleanup import is_pdf_question_line
 
         q_lines = sum(1 for ln in cleaned.splitlines() if is_pdf_question_line(ln))
         q_chunks = sum(1 for t in texts if t.strip() and is_pdf_question_line(t.splitlines()[0]))
@@ -214,7 +214,7 @@ def _print_table(rows: list[SampleMetrics]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--json", action="store_true", help="写出 common/data/cleanup_benchmark.json")
+    parser.add_argument("--json", action="store_true", help="写出 app/data/runtime/cleanup_benchmark.json")
     args = parser.parse_args()
 
     rows: list[SampleMetrics] = []
@@ -225,7 +225,7 @@ def main() -> int:
     _print_table(rows)
 
     if args.json:
-        out = _ROOT / "common" / "data" / "cleanup_benchmark.json"
+        out = _ROOT / "app" / "data" / "runtime" / "cleanup_benchmark.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "chunk_size": DEFAULT_CHUNK_SIZE,

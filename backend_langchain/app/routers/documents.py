@@ -17,8 +17,8 @@ from app.models import AgentDocument, User
 from app.response import fail, ok
 from app.settings import oss_config
 from app.utils import format_datetime
-from common.document_pipeline.ingest import detect_format
-from common.oss_client import (
+from app.services.document_pipeline.ingest import detect_format
+from app.services.oss_client import (
     OssNotConfiguredError,
     build_object_key,
     object_exists,
@@ -65,7 +65,7 @@ def _doc_row(doc: AgentDocument) -> dict:
 
 
 async def _run_ingest(document_id: int) -> None:
-    from common.document_pipeline.user_ingest import ingest_user_document_from_oss
+    from app.services.document_pipeline.user_ingest import ingest_user_document_from_oss
 
     async with SessionLocal() as db:
         doc = await db.get(AgentDocument, document_id)
@@ -224,7 +224,7 @@ async def delete_document(
     user: User = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
-    from common.document_pipeline.user_ingest import purge_user_document
+    from app.services.document_pipeline.user_ingest import purge_user_document
 
     result = await db.execute(
         select(AgentDocument).where(

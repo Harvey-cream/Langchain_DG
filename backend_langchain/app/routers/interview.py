@@ -1,8 +1,6 @@
 """AI 面试大师 API：/api/interview/*"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
@@ -12,14 +10,14 @@ from app.db import get_db
 from app.deps import require_user
 from app.models import ConversationSummary, InterviewConversation, InterviewSession, User
 from app.response import fail, ok
-from app.utils import format_datetime
-from common.agent import interview_checkpoint_thread_id
-from common.extend import (
+from app.utils import format_datetime, utc_now_naive
+from agent.graph_factory import interview_checkpoint_thread_id
+from app.services.extend import (
     fallback_chat_title,
     polish_interview_title,
     schedule_async_title_polish,
 )
-from common.stream import (
+from agent.stream import (
     SESSION_STATUS_GENERATING,
     iter_sse_chat,
     parse_resume_pdf,
@@ -213,7 +211,7 @@ async def patch_conversation(
 
     if body.pinned is not None:
         conv.pinned = bool(body.pinned)
-        conv.pinned_at = datetime.now(timezone.utc) if conv.pinned else None
+        conv.pinned_at = utc_now_naive() if conv.pinned else None
 
     if body.title is None and body.pinned is None:
         return fail("请提供 title 或 pinned")

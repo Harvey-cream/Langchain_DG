@@ -106,7 +106,7 @@ def main() -> int:
     args = parser.parse_args()
 
     from config.config import CORPUS_USER
-    from common.rag import (
+    from agent.rag.rag import (
         get_store,
         retrieve_context,
         search_hits,
@@ -199,7 +199,7 @@ def main() -> int:
 
     _section("6) RAG 门控 decide_rag_gate")
     try:
-        from common.rag_gate import decide_rag_gate
+        from agent.rag.rag_gate import decide_rag_gate
 
         need = asyncio.run(
             decide_rag_gate(query, mode="main", skill_name="knowledge_qa")
