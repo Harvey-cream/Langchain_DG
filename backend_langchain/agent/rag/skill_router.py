@@ -315,11 +315,15 @@ async def prepare_turn_context(
     on_search: Callable[[], None] | None = None,
     user_id: int | None = None,
     skills: tuple[SkillSpec, ...] | None = None,
+    skip_rag: bool = False,
+    precomputed_retrieved: str = "",
 ) -> tuple[SkillSpec | None, str, str]:
-    """Skill 向量路由 → RAG 门控 → 问句改写 → 粗召回 + 精排检索。"""
-    from agent.rag.query_rewrite import rewrite_search_queries
+    """Skill 向量路由 → Retrieval Planner →（按需）粗召回 + 精排。
+
+    skip_rag=True：仅做 Skill，复用 precomputed_retrieved（Context Builder 已检索）。
+    """
     from agent.rag.rag import retrieve_context
-    from agent.rag.rag_gate import decide_rag_gate
+    from agent.rag.retrieval_planner import plan_retrieval
     from config.config import CORPUS_INTERVIEW, CORPUS_USER
 
     text = (user_input or "").strip()
@@ -331,23 +335,24 @@ async def prepare_turn_context(
     skill_context = _render_skill_context(spec)
     skill_name = spec.name if spec else None
 
+    if skip_rag:
+        return spec, skill_context, (precomputed_retrieved or "").strip()
+
     retrieved = ""
     if text:
-        need_rag = await decide_rag_gate(text, mode=mode, skill_name=skill_name)
-        if need_rag:
+        plan = await plan_retrieval(
+            text,
+            mode=mode,
+            skill_name=skill_name,
+            recent_dialogue=recent_dialogue,
+        )
+        if plan.need_rag:
             if on_search:
                 on_search()
-            questions = await rewrite_search_queries(
-                text,
-                mode=mode,
-                skill_name=skill_name,
-                recent_dialogue=recent_dialogue,
-            )
+            questions = plan.search_questions or [text]
             if mode == "interview":
-                # 面试线：内置 knowledge（docs2）
                 retrieved = retrieve_context(questions, corpus=CORPUS_INTERVIEW)
             else:
-                # 企业知识库AI助手：只检索用户上传库 user_knowledge
                 retrieved = retrieve_context(
                     questions,
                     corpus=CORPUS_USER,

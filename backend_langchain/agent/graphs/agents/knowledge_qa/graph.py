@@ -21,7 +21,7 @@ from agent.graph_factory import (
 from agent.rag.skill_router import KNOWLEDGE_QA_SKILLS, prepare_turn_context
 from agent.rag.web_search import forced_web_search, format_web_context
 from config.config import get_qwen_chat_model
-from agent.runtime.prompts_knowledge import AGENT_SYSTEM_PREFIX
+from agent.graphs.agents.knowledge_qa.prompts import SYSTEM_PREFIX
 from agent.tools.knowledge import get_all_agent_tools
 
 
@@ -56,7 +56,7 @@ def build_knowledge_qa_graph(
     model = get_qwen_chat_model(temperature=temperature, streaming=True)
     if tools_list:
         model = model.bind_tools(tools_list)
-    system_message = SystemMessage(content=AGENT_SYSTEM_PREFIX)
+    system_message = SystemMessage(content=SYSTEM_PREFIX)
 
     async def skill_recall(state: AgentState, config: RunnableConfig) -> dict[str, str]:
         user_text = _latest_user_text(state["messages"])
@@ -91,6 +91,12 @@ def build_knowledge_qa_graph(
         def _on_search() -> None:
             writer({"type": "status", "text": "正在搜索文档..."})
 
+        from agent.context_builder import turn_context_from_config
+
+        tc = turn_context_from_config(config)
+        skip_rag = bool(tc.get("rag_done"))
+        precomputed = (state.get("retrieved_context") or "") if skip_rag else ""
+
         spec, skill_context, retrieved = await prepare_turn_context(
             user_text,
             mode="main",
@@ -98,6 +104,8 @@ def build_knowledge_qa_graph(
             on_search=_on_search,
             user_id=_user_id_from_config(config),
             skills=KNOWLEDGE_QA_SKILLS,
+            skip_rag=skip_rag,
+            precomputed_retrieved=precomputed,
         )
         return {
             "skill_name": spec.name if spec else "",

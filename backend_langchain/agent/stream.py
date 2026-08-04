@@ -345,6 +345,17 @@ async def iter_sse_chat(
         yield sse_bytes({"type": "done"})
         return
 
+    try:
+        from agent.memory.long_term_agent import schedule_long_term_memory
+
+        schedule_long_term_memory(
+            user_id=int(session_obj.user_id),
+            user_text=user_input,
+            assistant_text=reply,
+        )
+    except Exception:  # noqa: BLE001
+        log_exception_event(logger, f"{log_prefix}_memory_schedule_failed")
+
     yield sse_bytes({"type": "done"})
 
 

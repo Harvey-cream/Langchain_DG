@@ -262,6 +262,12 @@ def build_agent_graph(
             except ValueError:
                 uid = None
 
+        from agent.context_builder import turn_context_from_config
+
+        tc = turn_context_from_config(config)
+        skip_rag = bool(tc.get("rag_done"))
+        precomputed = (state.get("retrieved_context") or "") if skip_rag else ""
+
         spec, skill_context, retrieved = await prepare_turn_context(
             user_text,
             mode=recall_mode,  # type: ignore[arg-type]
@@ -269,6 +275,8 @@ def build_agent_graph(
             on_search=_on_search,
             user_id=uid if recall_mode == "main" else None,
             skills=skill_catalog,
+            skip_rag=skip_rag,
+            precomputed_retrieved=precomputed,
         )
         return {
             "skill_name": spec.name if spec else "",
@@ -349,29 +357,54 @@ async def stream_graph_chat_model_events(
     resume_pdf: bool | None = None,
     attachments: list[dict] | None = None,
     memory: MemoryTurnContext | None = None,
+    recall_mode: RecallModeParam = "main",
 ) -> AsyncIterator[dict[str, Any]]:
     """流式产出事件：delta / status / web_sources / interrupt / pdf_ready（custom + updates）。
 
-    总控挂载子图时必须 subgraphs=True，否则子图内 get_stream_writer 的 delta 到不了前端。
+    图前 Context Builder：History 读 || Memory || Retrieval Planner→RAG；
+    History 压缩写在 gather 后串行。总控挂载子图时必须 subgraphs=True。
     """
+    from agent.context_builder import (
+        build_turn_context,
+        turn_context_as_dict,
+    )
+
     if resume_pdf is not None:
         graph_input: Any = Command(resume=resume_pdf)
+        config = _graph_config(thread_id)
+        if attachments:
+            config["configurable"]["attachments"] = attachments
     else:
+        # 1) Context Builder（读并行）
+        turn_ctx = await build_turn_context(
+            agent,
+            prompt_text=prompt_text,
+            thread_id=thread_id,
+            mode=recall_mode,
+            memory=memory,
+        )
+        # 2) History 写串行
         await _compress_history_safely(agent, thread_id, memory=memory)
+
+        turn_messages: list[Any] = []
+        if turn_ctx.memory_text.strip():
+            turn_messages.append(SystemMessage(content=turn_ctx.memory_text))
+        turn_messages.append(HumanMessage(content=prompt_text))
         graph_input = {
-            "messages": [HumanMessage(content=prompt_text)],
+            "messages": turn_messages,
             "skill_name": "",
             "skill_context": "",
-            "retrieved_context": "",
+            "retrieved_context": turn_ctx.retrieved_context,
             "web_context": "",
             "next_agent": "",
         }
 
-    seen_pdf: set[tuple[str, str]] = set()
+        config = _graph_config(thread_id)
+        config["configurable"]["turn_context"] = turn_context_as_dict(turn_ctx)
+        if attachments:
+            config["configurable"]["attachments"] = attachments
 
-    config = _graph_config(thread_id)
-    if attachments:
-        config["configurable"]["attachments"] = attachments
+    seen_pdf: set[tuple[str, str]] = set()
 
     async for item in agent.astream(
         graph_input,

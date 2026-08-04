@@ -1,4 +1,4 @@
-"""企业知识库线总控 Graph：LLM 分诊 → 挂载各子 Agent 自有子图。
+"""企业知识库线总控 Graph：Cascade Router（规则短路）→ LLM 兜底 → 挂载子图。
 
 不写长答案；子 Agent 说明书见 knowledge_subagents。与面试线隔离。
 """
@@ -19,6 +19,7 @@ from agent.checkpointer import get_checkpointer
 from config.config import get_qwen_chat_model
 from agent.graphs.agents.doc_summary import build_doc_summary_graph
 from agent.graphs.agents.knowledge_qa import build_knowledge_qa_graph
+from agent.graphs.cascade_route import try_cascade_route
 from agent.graphs.knowledge_subagents import (
     KNOWLEDGE_SUB_AGENTS,
     KnowledgeAgentId,
@@ -67,33 +68,43 @@ def build_knowledge_supervisor_graph(
     async def route_node(state: AgentState) -> Command:
         user_text = _latest_user_text(state["messages"])
         agent_id: KnowledgeAgentId = "knowledge_qa"
+        route_source = "fallback"
+
         if user_text:
-            try:
-                llm = get_qwen_chat_model(temperature=0.0, streaming=False)
-                structured = llm.with_structured_output(RouteDecision)
-                decision: RouteDecision = await structured.ainvoke(
-                    [
-                        SystemMessage(content=router_system),
-                        HumanMessage(content=f"用户本轮消息：\n{user_text}"),
-                    ]
-                )
-                picked = str(decision.agent_id or "").strip()
-                if picked in valid_ids:
-                    agent_id = picked  # type: ignore[assignment]
-            except Exception as e:  # noqa: BLE001
-                log_warning_event(
-                    logger,
-                    "knowledge_supervisor_route_failed",
-                    error=str(e),
-                    fallback="knowledge_qa",
-                )
-                agent_id = "knowledge_qa"
+            cascaded = try_cascade_route(user_text)
+            if cascaded is not None and cascaded in valid_ids:
+                agent_id = cascaded
+                route_source = "rule"
+            else:
+                try:
+                    llm = get_qwen_chat_model(temperature=0.0, streaming=False)
+                    structured = llm.with_structured_output(RouteDecision)
+                    decision: RouteDecision = await structured.ainvoke(
+                        [
+                            SystemMessage(content=router_system),
+                            HumanMessage(content=f"用户本轮消息：\n{user_text}"),
+                        ]
+                    )
+                    picked = str(decision.agent_id or "").strip()
+                    if picked in valid_ids:
+                        agent_id = picked  # type: ignore[assignment]
+                    route_source = "llm"
+                except Exception as e:  # noqa: BLE001
+                    log_warning_event(
+                        logger,
+                        "knowledge_supervisor_route_failed",
+                        error=str(e),
+                        fallback="knowledge_qa",
+                    )
+                    agent_id = "knowledge_qa"
+                    route_source = "fallback"
 
         preview = user_text.replace("\n", " ")[:120]
         log_info_event(
             logger,
             "knowledge_supervisor_route",
             agent=agent_id,
+            route_source=route_source,
             input=preview,
         )
         return Command(goto=agent_id, update={"next_agent": agent_id})

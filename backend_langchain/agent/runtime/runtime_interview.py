@@ -54,5 +54,6 @@ async def stream_interview_agent(
         resume_pdf=resume_pdf,
         attachments=attachments,
         memory=memory,
+        recall_mode="interview",
     ):
         yield evt

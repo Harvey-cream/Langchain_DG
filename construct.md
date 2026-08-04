@@ -15,19 +15,74 @@
                     └──────────┬───────────┘
                                ▼
                     ┌────── 共用底座 ──────┐
-                    │ skill_recall→agent   │
+                    │ Context Builder      │
+                    │ Cascade / skill→agent│
                     │ RAG · MCP · PDF      │
                     │ 会话记忆 PG ckpt     │
                     └──────────┬───────────┘
                                │ 流式结束后异步
                                ▼
                     ┌── Memory Agent ──────┐
-                    │ 用户画像 UserProfile │
+                    │ Trigger→memories     │
+                    │ （跨会话长期记忆）      │
                     └──────────────────────┘
 ```
 
-- **Skill**：各 Agent / 子 Agent 独立一套，`skill_recall` 路由  
-- **Memory Agent**：主回复完成后异步执行，不挡响应
+- **Skill**：各 Agent / 子 Agent 独立一套，`skill_recall` 路由（归属 SubGraph）
+- **Context Builder**：图前并行准备 History 读 / 按需 Memory / Retrieval Planner→RAG
+- **Memory Agent**：主回复完成后异步；先 Trigger，有价值才写 `memories`
+
+## 请求链路（知识库线 · 性能）
+
+```
+FastAPI SSE
+  ↓
+Context Builder          # asyncio：History读 || Memory || Planner→RAG
+  ↓                      # History 压缩写：gather 外串行
+Cascade Router           # 高置信规则短路 → 否则 Supervisor LLM
+  ↓
+Supervisor Graph         # 挂载唯一 Business SubGraph
+  ↓
+Business SubGraph        # Skill（可复用预计算 RAG）→ agent ↔ tools
+  ↓
+SSE / 落库
+  ↓
+Async Memory Writer      # 不挡 SSE
+```
+
+| 层 | 说明 |
+|----|------|
+| **Context Builder** | `agent/context_builder.py`；`turn_context` 注入 `configurable`；`retrieved_context` 预填 State |
+| **Retrieval Planner** | `agent/rag/retrieval_planner.py`；一次 LLM 合并原 Gate+Rewrite |
+| **Cascade Router** | `agent/graphs/cascade_route.py`；进 `supervisor_knowledge.route` |
+| **Memory 读** | `should_retrieve_memory` 按需；写路径仍异步后置 |
+
+## 子 Agent 工程规范（常用）
+
+目录约定（对话线子 Agent 与后置 Agent 共用）：
+
+```
+agent/graphs/agents/<name>/
+  __init__.py     # 只导出 build_<name>_graph
+  graph.py        # StateGraph：节点函数 + 边 + compile()
+  prompts.py      # 本 Agent 系统提示（与 graph 同目录，勿集中到 runtime）
+  schemas.py      # 可选：Pydantic 结构化输出
+```
+
+| 规范 | 说明 |
+|------|------|
+| **一 Agent 一子图** | 自有节点与边；总控只 `add_node` 挂载，不改子图内部 |
+| **工厂** | `build_<name>_graph(...)`；对话子图默认 **不自带 checkpointer**（由 Supervisor/`stream` 外层挂） |
+| **节点** | `async def` 写在 `build_*` 内（与 `doc_summary` / `knowledge_qa` 一致） |
+| **结构化输出** | LLM 决策用 **Pydantic + `with_structured_output`**（总控 `RouteDecision`、Memory `ExtractResult`/`DecideResult`、Planner `RetrievalPlan`） |
+| **说明书** | 知识库线子 Agent 在 `knowledge_subagents.py` 写职责/何时用/何时不用，供 Supervisor 分诊 |
+| **两条线隔离** | 知识库 / 面试顶层互不调用；跨线只共用底座 |
+| **Memory 例外** | **不进** 任一线路由顶层；专用 `MemoryAgentState`；无 SSE、无 checkpointer；SSE 落库后 `ainvoke` |
+
+对话子图典型边：`START → skill_recall → agent (↔ tools) → END`。  
+Memory 写图：`START → trigger → extract → apply → END`。
+
+参考实现：`agents/doc_summary`、`agents/knowledge_qa`、`agents/memory`；总控：`supervisor_knowledge.py`。
 
 ## Agent 视图
 
@@ -49,13 +104,13 @@
 │              … 入库 Pipeline（非 Agent）…    … 可扩展 …       │
 │                                                              │
 │   ┌─────────────────────┐                                    │
-│   │   Memory Agent      │  ← 异步后置，更新用户画像           │
+│   │   Memory Agent      │  ← 异步后置，写 memories            │
 │   └─────────────────────┘                                    │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-- **线内顶层路由（Supervisor）**：企业知识库线、面试线各有一个**路由型顶层 Graph**（LLM 阅读子 Agent 定义 → 选线内子图，不写长答案）。知识库线实现见 `supervisor_knowledge`；禁止关键词硬编码分诊。
+- **线内顶层路由（Supervisor）**：企业知识库线、面试线各有一个**路由型顶层 Graph**（不写长答案）。知识库线：`Cascade Router`（高置信规则短路）+ Supervisor LLM 兜底；见 `supervisor_knowledge` / `cascade_route`。默认 LLM 分诊；仅高置信意图允许规则短路。
 - **两条线严禁串联**：两边顶层互不调用、不共用一张总控图；前端分入口，只共用底座（图工厂 / RAG / SSE 等）。线内子 Agent 可串联（如面试 `JD → 模拟 → 评估`），跨线不可。
 - **Memory Agent**：异步后置，挂在主回复之后，不并入任一线路由顶层。
 - **子 Agent 定义**：每个子 Agent 有独立说明书（职责 / 何时用 / 何时不用），交给总控 LLM；**各自独立子图**（自有节点与边，见 `agent/graphs/agents/`），图内仍可有 Skill 集。
@@ -66,9 +121,11 @@
 
 | 技术 | 作用 |
 |------|------|
-| **LangGraph** | `skill_recall → agent ↔ tools`，子 Agent 共用图工厂 |
-| **Skill 路由** | 向量匹配意图 + 约束输出结构（每 Agent 独立 Skill 集） |
-| **RAG** | pgvector（表 `rag_embeddings`）；corpus=user 与内置 `knowledge` 隔离 |
+| **LangGraph** | `skill_recall → agent ↔ tools`；知识库线外层 Supervisor |
+| **Context Builder** | 图前并行上下文；History 读并行、压缩写串行 |
+| **Retrieval Planner** | Gate+Rewrite 合并为一次 structured LLM |
+| **Skill 路由** | 向量匹配意图 + 约束输出结构（每 Agent 独立 Skill 集；留在 SubGraph） |
+| **RAG** | pgvector（表 `rag_embeddings`）；corpus=user 与内置 `knowledge` 隔离；可按需 |
 | **会话记忆** | PostgreSQL checkpoint（独立库）；超阈值压缩（摘要 + 保留近几轮） |
 | **SSE** | 流式对话；附件当轮临时注入，不落库 |
 
@@ -114,11 +171,15 @@ Workflow 按意图路由子 Agent，可串联：`JD → 模拟 → 评估`。
 
 | 项 | 说明 |
 |----|------|
-| **时机** | 主回复流式结束、Postgres 落库之后 |
-| **职责** | 决策是否更新 `UserProfile`（目标岗、技术栈、偏好等） |
-| **原则** | 不进主链路，不增加首 token 延迟 |
+| **包路径** | `agent/graphs/agents/memory`（`build_memory_agent_graph`） |
+| **时机** | 主回复流式结束、会话落库之后；`asyncio.create_task` → `ainvoke`，不挡 SSE |
+| **Trigger** | 规则过滤（长度 / 偏好关键词等）；无长期价值直接 END |
+| **流水线** | `trigger → extract → apply`；Extract/Decide 用 Pydantic；apply 内 search→decide→upsert |
+| **表** | `memories`（pgvector，与 `rag_embeddings` 隔离） |
+| **读取** | `format_retrieved_memories` + `should_retrieve_memory` 按需 Top-K 注入 System |
+| **原则** | 不进 Supervisor；失败只打日志 |
 
 ```
-主 Agent 流式回复 → done →（异步）Memory Agent → UserProfile
+回复完成 → Memory Trigger →（有价值）extract/decide → memories（PG+pgvector）
+下次提问 →（按需）Retrieve → 注入 Prompt → Main Agent
 ```
-

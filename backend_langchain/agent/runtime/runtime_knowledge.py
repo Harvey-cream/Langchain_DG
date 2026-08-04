@@ -92,5 +92,6 @@ async def stream_agent(
         resume_pdf=resume_pdf,
         attachments=attachments,
         memory=memory,
+        recall_mode="main",
     ):
         yield evt

@@ -8,14 +8,13 @@ Agent 响应延迟诊断：分阶段计时，区分「模型慢」还是「Agent
   python Scripts/benchmark_agent_latency.py -y --warmup
 
 阶段说明：
-  skill_route   Skill 向量路由（本地/HF 嵌入）
-  rag_gate      RAG 门控 LLM（是否检索）
-  query_rewrite 问句改写 LLM（need_rag 时）
-  rag_retrieve  向量召回 + DashScope 精排
-  skill_recall  上述 Workflow 合计（≈ skill_recall 节点）
-  llm_ttft      直连模型首 token（基线，无 Agent）
-  agent_ttft    完整 Agent 首 token（含 Workflow + 模型）
-  agent_total   完整 Agent 流结束
+  skill_route        Skill 向量路由（本地/HF 嵌入）
+  retrieval_plan     Retrieval Planner LLM（need_rag + 问句，原 gate+rewrite）
+  rag_retrieve       向量召回 + DashScope 精排
+  skill_recall       上述 Workflow 合计（≈ skill_recall 节点）
+  llm_ttft           直连模型首 token（基线，无 Agent）
+  agent_ttft         完整 Agent 首 token（含 Workflow + 模型）
+  agent_total        完整 Agent 流结束
 """
 from __future__ import annotations
 
@@ -40,9 +39,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.graph_factory import close_checkpointer, init_checkpointer, stream_graph_chat_model_events
 from app.services.extend import quick_agent_greeting_prompt
-from agent.rag.query_rewrite import rewrite_search_queries
 from agent.rag.rag import retrieve_context, search_hits
-from agent.rag.rag_gate import decide_rag_gate
+from agent.rag.retrieval_planner import plan_retrieval
 from agent.rag.skill_router import AGENT_SKILLS, _pick_skill, prepare_turn_context, warmup_skill_phrase_cache
 from config.config import CORPUS_AGENT, get_qwen_chat_model
 from app.settings import llm_config
@@ -88,8 +86,7 @@ class StageTimes:
     """单题各阶段耗时（秒）；None 表示未执行。"""
 
     skill_route: float | None = None
-    rag_gate: float | None = None
-    query_rewrite: float | None = None
+    retrieval_plan: float | None = None
     rag_retrieve: float | None = None
     skill_recall: float | None = None
     llm_ttft: float | None = None
@@ -105,8 +102,7 @@ class StageTimes:
     def as_dict(self) -> dict[str, Any]:
         return {
             "skill_route": self.skill_route,
-            "rag_gate": self.rag_gate,
-            "query_rewrite": self.query_rewrite,
+            "retrieval_plan": self.retrieval_plan,
             "rag_retrieve": self.rag_retrieve,
             "skill_recall": self.skill_recall,
             "llm_ttft": self.llm_ttft,
@@ -138,21 +134,17 @@ async def _time_skill_route(query: str) -> tuple[float, str]:
     return time.perf_counter() - t0, spec.name if spec else ""
 
 
-async def _time_rag_gate(query: str, skill_name: str | None) -> tuple[float, bool]:
+async def _time_retrieval_plan(
+    query: str, skill_name: str | None
+) -> tuple[float, bool, list[str]]:
     t0 = time.perf_counter()
-    need = await decide_rag_gate(query, mode="main", skill_name=skill_name or None)
-    return time.perf_counter() - t0, need
-
-
-async def _time_query_rewrite(query: str, skill_name: str | None) -> tuple[float, list[str]]:
-    t0 = time.perf_counter()
-    qs = await rewrite_search_queries(
+    plan = await plan_retrieval(
         query,
         mode="main",
         skill_name=skill_name,
         recent_dialogue="",
     )
-    return time.perf_counter() - t0, qs
+    return time.perf_counter() - t0, bool(plan.need_rag), list(plan.search_questions or [])
 
 
 def _time_rag_retrieve(questions: list[str]) -> float:
@@ -226,16 +218,12 @@ async def benchmark_one(case: dict[str, str], *, run_idx: int) -> StageTimes:
         out.skill_route = dt
         out.skill_name = skill
 
-        dt, need = await _time_rag_gate(query, skill or None)
-        out.rag_gate = dt
+        dt, need, questions = await _time_retrieval_plan(query, skill or None)
+        out.retrieval_plan = dt
         out.need_rag = need
-
-        questions: list[str] = [query]
+        out.rewrite_questions = questions
         if need:
-            dt, questions = await _time_query_rewrite(query, skill or None)
-            out.query_rewrite = dt
-            out.rewrite_questions = questions
-            out.rag_retrieve = _time_rag_retrieve(questions)
+            out.rag_retrieve = _time_rag_retrieve(questions or [query])
 
         dt, skill2, _ = await _time_skill_recall(query)
         out.skill_recall = dt
@@ -272,13 +260,12 @@ def _print_case_detail(case: dict[str, str], st: StageTimes) -> None:
         print(_console(f"  改写问句: {st.rewrite_questions}"))
     if any(
         v is not None
-        for v in (st.skill_route, st.rag_gate, st.query_rewrite, st.rag_retrieve, st.skill_recall)
+        for v in (st.skill_route, st.retrieval_plan, st.rag_retrieve, st.skill_recall)
     ):
         print(
             "  Workflow: "
             f"route={_ms(st.skill_route)} | "
-            f"gate={_ms(st.rag_gate)} | "
-            f"rewrite={_ms(st.query_rewrite)} | "
+            f"planner={_ms(st.retrieval_plan)} | "
             f"retrieve={_ms(st.rag_retrieve)} | "
             f"合计 skill_recall={_ms(st.skill_recall)}"
         )
@@ -308,8 +295,7 @@ def _print_bottleneck_hint(st: StageTimes) -> None:
     parts: list[tuple[str, float]] = []
     for name, val in (
         ("skill_route", st.skill_route),
-        ("rag_gate", st.rag_gate),
-        ("query_rewrite", st.query_rewrite),
+        ("retrieval_plan", st.retrieval_plan),
         ("rag_retrieve", st.rag_retrieve),
         ("llm_ttft(基线)", st.llm_ttft),
     ):
@@ -323,10 +309,8 @@ def _print_bottleneck_hint(st: StageTimes) -> None:
 
     if st.llm_ttft is not None and st.llm_ttft >= 2.0:
         hints.append("直连模型首 token ≥2s → 优先查 LLM API/模型/网络")
-    if st.rag_gate and st.rag_gate >= 1.0:
-        hints.append("RAG 门控 LLM 偏慢 → 可考虑规则短路或更小模型")
-    if st.query_rewrite and st.query_rewrite >= 1.0:
-        hints.append("问句改写 LLM 偏慢 → 可关 QUERY_REWRITE_ENABLED 做 A/B")
+    if st.retrieval_plan and st.retrieval_plan >= 1.0:
+        hints.append("Retrieval Planner LLM 偏慢 → 可规则短路 need_rag 或关 QUERY_REWRITE_ENABLED")
     if st.rag_retrieve and st.rag_retrieve >= 1.5:
         hints.append("检索+精排偏慢 → 查 pgvector/嵌入 API/精排 API")
     if st.skill_route and st.skill_route >= 0.5:
@@ -365,7 +349,7 @@ def _print_summary(rows: list[tuple[dict[str, str], StageTimes]]) -> None:
         "agent_total",
     ]
     print(
-        f"{'id':<12} {'route':>8} {'gate':>8} {'rewrite':>8} {'retrieve':>9} "
+        f"{'id':<12} {'route':>8} {'planner':>8} {'retrieve':>9} "
         f"{'recall':>8} {'llm_ttft':>9} {'ag_ttft':>9} {'ag_total':>10}"
     )
     print("-" * 72)
@@ -376,7 +360,7 @@ def _print_summary(rows: list[tuple[dict[str, str], StageTimes]]) -> None:
         err_mark = " *" if st.error else ""
         print(
             f"{case['id']:<12}{err_mark} "
-            f"{_ms(st.skill_route):>8} {_ms(st.rag_gate):>8} {_ms(st.query_rewrite):>8} "
+            f"{_ms(st.skill_route):>8} {_ms(st.retrieval_plan):>8} "
             f"{_ms(st.rag_retrieve):>9} {_ms(st.skill_recall):>8} "
             f"{_ms(st.llm_ttft):>9} {_ms(st.agent_ttft):>9} {_ms(st.agent_total):>10}"
         )
@@ -388,8 +372,7 @@ def _print_summary(rows: list[tuple[dict[str, str], StageTimes]]) -> None:
     print(
         f"{'AVG':<12} "
         f"{_ms(_avg([s.skill_route for s in all_st])):>8} "
-        f"{_ms(_avg([s.rag_gate for s in all_st])):>8} "
-        f"{_ms(_avg([s.query_rewrite for s in all_st])):>8} "
+        f"{_ms(_avg([s.retrieval_plan for s in all_st])):>8} "
         f"{_ms(_avg([s.rag_retrieve for s in all_st])):>9} "
         f"{_ms(_avg([s.skill_recall for s in all_st])):>8} "
         f"{_ms(_avg([s.llm_ttft for s in all_st])):>9} "
@@ -401,15 +384,14 @@ def _print_summary(rows: list[tuple[dict[str, str], StageTimes]]) -> None:
     avg_llm = _avg([s.llm_ttft for s in all_st]) or 0
     avg_recall = _avg([s.skill_recall for s in all_st]) or 0
     avg_agent = _avg([s.agent_ttft for s in all_st]) or 0
-    avg_gate = _avg([s.rag_gate for s in all_st]) or 0
-    avg_rewrite = _avg([s.query_rewrite for s in all_st if s.query_rewrite is not None]) or 0
+    avg_plan = _avg([s.retrieval_plan for s in all_st]) or 0
     avg_retrieve = _avg([s.rag_retrieve for s in all_st if s.rag_retrieve is not None]) or 0
 
     if avg_llm >= max(avg_recall, avg_agent) * 0.5:
         print("  - 模型/API 首 token 占比较高 -> 换更快模型、更近的 API 区域、或降 temperature/stream 参数")
-    if avg_gate + avg_rewrite > avg_retrieve and avg_gate + avg_rewrite > 0.8:
-        print("  - RAG 前置 LLM（门控+改写）累计偏慢 -> 门控/改写是优化重点")
-    if avg_retrieve > avg_gate and avg_retrieve > 1.0:
+    if avg_plan > avg_retrieve and avg_plan > 0.8:
+        print("  - Retrieval Planner LLM 偏慢 -> Planner 是优化重点")
+    if avg_retrieve > avg_plan and avg_retrieve > 1.0:
         print("  - 向量检索+精排偏慢 -> 查 pgvector、嵌入批大小、精排 top_k")
     if avg_recall > avg_llm and avg_recall > 1.0:
         print("  - Workflow(skill_recall) 整体慢于模型基线 -> Agent 管线是主因")

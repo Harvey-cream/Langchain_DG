@@ -197,21 +197,23 @@ def main() -> int:
                 f"text={(doc.page_content or '').replace(chr(10), ' ')[:70]!r}"
             )
 
-    _section("6) RAG 门控 decide_rag_gate")
+    _section("6) Retrieval Planner plan_retrieval")
     try:
-        from agent.rag.rag_gate import decide_rag_gate
+        from agent.rag.retrieval_planner import plan_retrieval
 
-        need = asyncio.run(
-            decide_rag_gate(query, mode="main", skill_name="knowledge_qa")
+        plan = asyncio.run(
+            plan_retrieval(query, mode="main", skill_name="knowledge_qa")
         )
-        if need:
-            _ok(f"need_rag={need}（会继续检索）")
+        if plan.need_rag:
+            _ok(
+                f"need_rag={plan.need_rag} questions={plan.search_questions!r}（会继续检索）"
+            )
         else:
             _fail(
-                f"need_rag={need}（对话链路会跳过检索；这常是「库有文档但回答说找不到」的主因）"
+                f"need_rag={plan.need_rag}（对话链路会跳过检索；这常是「库有文档但回答说找不到」的主因）"
             )
     except Exception as e:  # noqa: BLE001
-        _fail(f"门控调用失败（主线 fallback=False，等同不检索）: {e}")
+        _fail(f"Planner 调用失败（主线 fallback=False，等同不检索）: {e}")
 
     _section("7) retrieve_context（改写+召回+精排，与对话一致）")
     try:
