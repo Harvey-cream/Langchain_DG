@@ -11,13 +11,13 @@ from app.deps import require_user
 from app.models import ConversationSummary, InterviewConversation, InterviewSession, User
 from app.response import fail, ok
 from app.utils import format_datetime, utc_now_naive
-from agent.graph_factory import interview_checkpoint_thread_id
+from runtime.checkpoint.checkpointer import interview_checkpoint_thread_id
 from app.services.extend import (
     fallback_chat_title,
     polish_interview_title,
     schedule_async_title_polish,
 )
-from agent.stream import (
+from app.sse import (
     SESSION_STATUS_GENERATING,
     iter_sse_chat,
     parse_resume_pdf,

@@ -1,0 +1,16 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Protocol
+
+
+class ObjectStoragePort(Protocol):
+    def exists(self, key: str) -> bool: ...
+
+    def download(self, key: str, destination: Path) -> None: ...
+
+    def delete(self, key: str) -> None: ...
+
+    def put(self, key: str, data: bytes, *, content_type: str) -> None: ...
+
+    def sign_upload(self, key: str, *, content_type: str, expires: int | None = None) -> str: ...

@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 
 from app.services.document_pipeline.ingest import chunks_from_path, detect_format
 from app.services.oss_client import delete_object, download_to_path
-from agent.rag.rag import get_store
+from infrastructure.rag.rag import get_store
 from config.config import CORPUS_USER
 
 logger = logging.getLogger(__name__)

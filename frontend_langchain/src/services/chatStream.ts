@@ -106,6 +106,8 @@ export function normalizeChatWhitespace(text: string): string {
 
 // --- SSE：idle 内无字节则中止（默认 3 分钟），不设固定总超时 ---
 const DEFAULT_IDLE_MS = 180000;
+export const MAX_ATTACHMENT_COUNT = 3;
+export const MAX_TEXT_ATTACHMENT_CHARS = 60000;
 /** 与 ChatPage 附件校验、nginx client_max_body_size 对齐 */
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MAX_ATTACHMENT_MB = 5;
@@ -113,7 +115,6 @@ export const MAX_ATTACHMENT_MB = 5;
 export const MAX_CHAT_STREAM_PAYLOAD_BYTES = 20 * 1024 * 1024;
 export const PAYLOAD_TOO_LARGE_MESSAGE =
   '附件或消息过大，单个文件请不超过 5MB，并减少同时上传的附件数量';
-const AGENT_STREAM_URL = '/api/agent/chat/stream/';
 /** 面试大师独立库 */
 export const INTERVIEW_STREAM_URL = '/api/interview/chat/stream/';
 
@@ -381,22 +382,6 @@ async function chatWithStreamAt(
     if (idleTimer !== undefined) clearTimeout(idleTimer);
     reader.releaseLock?.();
   }
-}
-
-/** 企业知识库AI助手：/api/agent/chat/stream/ */
-export async function chatWithAgentStream(
-  message: string,
-  conversationId: number | undefined,
-  callbacks: ChatStreamCallbacks,
-  options?: {
-    idleMs?: number;
-    signal?: AbortSignal;
-    resumePdfExport?: boolean;
-    enableWebSearch?: boolean;
-    attachments?: ChatAttachment[];
-  }
-): Promise<void> {
-  return chatWithStreamAt(AGENT_STREAM_URL, message, conversationId, callbacks, options);
 }
 
 /** AI 面试大师：/api/interview/chat/stream/（独立会话表） */

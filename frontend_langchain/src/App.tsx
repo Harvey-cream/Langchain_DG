@@ -3,7 +3,8 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import Login from './page/Langchain_login/Login';
 import Register from './page/Langchain_login/Register';
 import Home from './page/Home';
-import Chat from './page/Langchain/Chat';
+import InterviewChatPage from './pages/interview/InterviewChatPage';
+import ContractRoutes from './app/routes/ContractRoutes';
 
 const App: React.FC = () => {
   return (
@@ -13,8 +14,8 @@ const App: React.FC = () => {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/home" element={<Home />} />
-          <Route path="/chat" element={<Chat />} />
-          <Route path="/interview" element={<Chat />} />
+          <Route path="/interview" element={<InterviewChatPage />} />
+          <Route path="/contracts/*" element={<ContractRoutes />} />
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>

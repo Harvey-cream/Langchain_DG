@@ -7,11 +7,20 @@
 venv
 # 勿写裸 env，会误排除 backend_langchain/env/（Docker 构建需要其中 yaml）
 *.md
-frontend_langchain/node_modules
-frontend_langchain/dist
+# 前端和后端构建无关，排除整个目录
+frontend_langchain/
+# 知识库文档极大，后端构建不需要
+knowledge/
+# 奇怪的系统目录
+%USERPROFILE%/
 .env
 .env.*
 !.env.example
 **/terminals
 agent-tools
 assets
+# 排除其他非必要文件
+*.md
+README*
+SKILL.md
+construct.md

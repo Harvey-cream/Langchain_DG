@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RobotOutlined, IdcardOutlined } from '@ant-design/icons';
+import { IdcardOutlined, FileTextOutlined } from '@ant-design/icons';
 import './Home.css';
 
 const Home: React.FC = () => {
@@ -29,25 +29,10 @@ const Home: React.FC = () => {
         <div className="home-grid-bg" aria-hidden />
         <header className="home-header">
           <h1 className="home-title">小龙 AI</h1>
-          <p className="home-subtitle">/ 企业知识库 · 面试陪练 /</p>
+          <p className="home-subtitle">/ 面试陪练 · 合同管理 /</p>
         </header>
 
         <div className="home-cards">
-          <article className="home-card">
-            <div className="home-card-icon home-card-icon--agent">
-              <RobotOutlined />
-            </div>
-            <h2 className="home-card-title">企业知识库AI助手</h2>
-            <p className="home-card-desc">上传文档，基于你的资料做检索问答与摘要</p>
-            <button
-              type="button"
-              className="home-card-btn"
-              onClick={() => navigate('/chat')}
-            >
-              立即体验 →
-            </button>
-          </article>
-
           <article className="home-card">
             <div className="home-card-icon home-card-icon--interview">
               <IdcardOutlined />
@@ -62,6 +47,21 @@ const Home: React.FC = () => {
               onClick={() => navigate('/interview')}
             >
               立即体验 →
+            </button>
+          </article>
+
+          <article className="home-card">
+            <div className="home-card-icon home-card-icon--contract">
+              <FileTextOutlined />
+            </div>
+            <h2 className="home-card-title">合同管理</h2>
+            <p className="home-card-desc">管理客户合同、版本与合同文件，进入合同工作台</p>
+            <button
+              type="button"
+              className="home-card-btn"
+              onClick={() => navigate('/contracts')}
+            >
+              进入工作台 →
             </button>
           </article>
         </div>

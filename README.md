@@ -1,14 +1,14 @@
 # LangChain DG
 
-基于 LangGraph 的多 Agent 对话应用：企业知识库助手（Supervisor + 子 Agent）与面试线隔离运行，共用 RAG / SSE / Memory 底座。
+基于 LangGraph 的多 Agent 对话应用：AI 面试大师与合同管理两条产品线，共用 RAG / SSE / Memory 底座。
 
 ## 功能特性
 
-- 🤖 **多 Agent**：知识库线 Cascade + Supervisor 路由至文档摘要 / 知识问答子图；面试线独立入口；Memory Agent 异步后置
+- 🤖 **多 Agent**：AI 面试大师独立入口（单图 + Skill）；Memory Agent 异步后置
 - 💬 **智能对话**：LangGraph 状态图，PostgreSQL checkpoint 多轮记忆，超长会话可压缩
-- 🔍 **知识库检索**：pgvector RAG；用户库按 `corpus + user_id` 隔离；Retrieval Planner 按需检索
-- 📄 **PDF 导出**：HITL 确认后导出（知识库 / 面试线）
-- 🔎 **网页搜索**：可选联网（知识库问答）
+- 🔍 **RAG 检索**：pgvector；Interview 语料按 `corpus` 隔离；Retrieval Planner 按需检索
+- 📄 **PDF 导出**：HITL 确认后导出（面试线）
+- 📑 **合同管理**：客户 / 合同 / 合同版本 CRUD 与文件归属
 - 🔐 **安全认证**：JWT + SM2
 - ⚡ **流式响应**：SSE；图前 Context Builder 并行准备 Memory / RAG 上下文
 
@@ -82,33 +82,35 @@ backend_langchain/
 ├── app/                         # FastAPI
 │   ├── main.py
 │   ├── routers/
-│   │   ├── api.py               # 知识库助手 SSE / 对话
-│   │   ├── interview.py         # 面试线
-│   │   ├── documents.py         # 用户文档上传入库
+│   │   ├── interview.py         # 面试线 SSE / 对话
+│   │   ├── contract.py          # 合同 / 合同版本
+│   │   ├── customer.py          # 客户
 │   │   └── user.py              # 认证
 │   ├── services/document_pipeline/  # 清洗切块 → 向量化
+│   ├── sse.py                   # SSE 编排 + 异步 Memory 调度
 │   ├── models.py
 │   └── settings.py
-├── agent/                       # Agent 核心（两条线隔离）
-│   ├── context_builder.py       # 图前并行：History / Memory / Planner→RAG
-│   ├── stream.py                # SSE 编排 + 异步 Memory 调度
-│   ├── graph_factory.py         # 共用图工厂 / 流式事件
-│   ├── checkpointer.py          # PG checkpoint
-│   ├── graphs/
-│   │   ├── supervisor_knowledge.py   # 知识库总控
-│   │   ├── cascade_route.py          # 高置信规则短路
-│   │   ├── knowledge_subagents.py    # 子 Agent 说明书
-│   │   └── agents/
-│   │       ├── doc_summary/     # 文档摘要子图
-│   │       ├── knowledge_qa/    # 知识问答子图（工具 / PDF / 可选联网）
-│   │       └── memory/          # 长期记忆写图（trigger→extract→apply）
-│   ├── runtime/
-│   │   ├── runtime_knowledge.py
-│   │   └── runtime_interview.py # 面试线（单图 + Skill，可演进 Supervisor）
-│   ├── rag/                     # pgvector、Planner、Skill、精排
+├── runtime/                     # 运行机制（无业务）
+│   ├── context/builder.py       # 图前并行：History / Memory / Planner→RAG
+│   ├── execution/graph_factory.py  # 通用 State / 图工厂
+│   ├── streaming/stream.py      # astream → 统一事件
+│   └── checkpoint/checkpointer.py  # PG checkpoint
+├── products/                    # 产品线（互不 import）
+│   ├── interview/
+│   │   ├── runtime.py           # 面试线入口（单图 + Skill，可演进 Supervisor）
+│   │   ├── prompts.py
+│   │   ├── skills.py
+│   │   └── tools.py
+│   └── contract/
+│       ├── domain/              # 纯业务实体 / 值对象 / 领域错误
+│       ├── schemas/             # API DTO
+│       ├── application/         # 用例服务 + Ports
+│       └── ...
+├── infrastructure/              # 共享底座
+│   ├── rag/                     # pgvector、Planner、Skill 引擎、精排
 │   ├── memory/                  # 会话压缩 + 长期记忆读写
-│   ├── tools/                   # 知识库 / 面试工具
-│   ├── hitl/                    # PDF 人机确认
+│   │   └── agent/               # 长期记忆写图（trigger→extract→apply）
+│   ├── pdf/                     # PDF 人机确认 + 渲染
 │   └── mcp/                     # MCP
 ├── Scripts/                     # 建库 / 诊断脚本
 └── env/                         # yaml 配置样例
@@ -123,26 +125,19 @@ frontend_langchain/
 
 架构说明见仓库根目录 `construct.md`。
 
-## 构建知识库
+## 构建面试知识库
 
-### 方式一：容器内构建
-
-```bash
-docker compose exec backend python -m Scripts.build_rag_knowledge
-```
-
-### 方式二：本地构建
+Interview 语料位于 `backend_langchain/knowledge/docs2/<domain>/**/*.pdf`：
 
 ```bash
 cd backend_langchain
-python -m Scripts.build_rag_knowledge
+python -m Scripts.build_rag_knowledge --do-interview
 ```
 
-```bash
-python -m Scripts.build_rag_knowledge --agent-domains "vibe_coding" --do-interview
-```
-
-用户上传文档走 `documents` 入库 Pipeline（非 Agent），写入 `corpus=user` 并按 `user_id` 隔离。
+> 企业知识库（Agent）产品已于 Phase D 退休：`knowledge/docs1` 与 Chroma 数据归档在
+> `knowledge/_retired_agent_corpus/`；`agent_documents` / `agent_web_sources` 表
+> 归档脚本见 `migrations/0002_retire_knowledge_data.py`（显式执行，可回滚）。
+> `rag_embeddings` 中 `corpus in ('agent','user')` 的历史向量保留待迁移。
 
 ## 配置说明
 

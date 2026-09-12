@@ -5,12 +5,9 @@ from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.types import JSON
+from sqlalchemy.orm import Mapped, mapped_column
 
-
-class Base(DeclarativeBase):
-    pass
+from infrastructure.db.base import Base
 
 
 class User(Base):
@@ -59,28 +56,6 @@ class UserSession(Base):
     ai_response: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="completed", index=True)
     token_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=func.now(), server_default=func.now()
-    )
-
-
-class AgentWebSource(Base):
-    """知识库会话联网来源：一轮 session 对应一条 JSON 列表。
-
-    session_id / conversation_id 须与线上 user_sessions.id、user_conversations.id
-    同为 INT（部分库为 BIGINT；若 FK 3780 再按 SHOW CREATE 对齐）。
-    """
-
-    __tablename__ = "agent_web_sources"
-    __table_args__ = (UniqueConstraint("session_id", name="uq_agent_web_sources_session"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    session_id: Mapped[int] = mapped_column(Integer, ForeignKey("user_sessions.id"))
-    conversation_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("user_conversations.id"), nullable=True, index=True
-    )
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.user_id"), index=True)
-    sources_json: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), server_default=func.now()
     )
@@ -145,29 +120,6 @@ class UserProfile(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), unique=True, index=True)
     profile_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     profile_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=func.now(), server_default=func.now(), onupdate=func.now()
-    )
-
-
-class AgentDocument(Base):
-    """知识库助手侧栏上传的文档（原件在 OSS）。"""
-
-    __tablename__ = "agent_documents"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), index=True)
-    filename: Mapped[str] = mapped_column(String(512))
-    format: Mapped[str] = mapped_column(String(32), default="text")
-    oss_key: Mapped[str] = mapped_column(String(1024), default="")
-    content_type: Mapped[str] = mapped_column(String(128), default="application/octet-stream")
-    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
-    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=func.now(), server_default=func.now()
-    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), server_default=func.now(), onupdate=func.now()
     )

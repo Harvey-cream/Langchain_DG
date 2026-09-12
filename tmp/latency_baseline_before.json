@@ -1,0 +1,86 @@
+{
+  "meta": {
+    "label": "before",
+    "created_at": "2026-07-28T18:54:15.636585+00:00",
+    "mode": "stages",
+    "user_id": 1,
+    "model": "gpt-5.4",
+    "case_ids": [
+      "greet",
+      "chat"
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "greet",
+      "query": "你好",
+      "note": "寒暄：期望 Gate=false、Memory 可跳过（改后）",
+      "wall_stages_ms": 266887.6627999707,
+      "timings": {
+        "memory_retrieve_ms": 261094.9052000069,
+        "skill_pick_ms": 331.936200032942,
+        "rag_gate_ms": 2359.756699996069,
+        "query_rewrite_ms": 0.0,
+        "rag_retrieve_ms": 0.0,
+        "route_ms": 2514.837399998214,
+        "serial_context_ms": 263786.5981000359,
+        "prep_llm_serial_ms": 2359.756699996069,
+        "parallel_context_est_ms": 261094.9052000069,
+        "need_rag": false,
+        "skill_name": "document_export",
+        "route_agent": "knowledge_qa",
+        "memory_chars": 46,
+        "retrieved_chars": 0,
+        "rewrite_n": 0,
+        "full_route_ms": null,
+        "ttft_ms": null,
+        "total_ms": null,
+        "delta_count": 0,
+        "error": ""
+      }
+    },
+    {
+      "case_id": "chat",
+      "query": "今天天气怎么样？随便聊聊。",
+      "note": "闲聊：期望少检索",
+      "wall_stages_ms": 7961526.284199964,
+      "timings": {
+        "memory_retrieve_ms": 130336.9837999926,
+        "skill_pick_ms": 314.63999999687076,
+        "rag_gate_ms": 0.013699987903237343,
+        "query_rewrite_ms": 11105.231099994853,
+        "rag_retrieve_ms": 7816098.924499994,
+        "route_ms": 3667.1532000182196,
+        "serial_context_ms": 7957855.793099966,
+        "prep_llm_serial_ms": 11105.244799982756,
+        "parallel_context_est_ms": 7827518.809299974,
+        "need_rag": true,
+        "skill_name": "doc_summary",
+        "route_agent": "knowledge_qa",
+        "memory_chars": 46,
+        "retrieved_chars": 3064,
+        "rewrite_n": 1,
+        "full_route_ms": null,
+        "ttft_ms": null,
+        "total_ms": null,
+        "delta_count": 0,
+        "error": ""
+      }
+    }
+  ],
+  "summary": {
+    "avg": {
+      "memory_retrieve_ms": 195715.94449999975,
+      "skill_pick_ms": 323.2881000149064,
+      "rag_gate_ms": 1179.8851999919862,
+      "query_rewrite_ms": 5552.615549997427,
+      "rag_retrieve_ms": 3908049.462249997,
+      "route_ms": 3090.995300008217,
+      "serial_context_ms": 4110821.195600001,
+      "prep_llm_serial_ms": 6732.500749989413,
+      "parallel_context_est_ms": 4044306.85724999,
+      "ttft_ms": null,
+      "total_ms": null
+    }
+  }
+}

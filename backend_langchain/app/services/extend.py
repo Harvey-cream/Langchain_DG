@@ -97,23 +97,6 @@ def _quick_greeting_hit(message: str) -> str | None:
     return None
 
 
-def quick_agent_greeting_prompt(message: str) -> str | None:
-    """企业知识库AI助手：问候/短句快速路径提示词（不走 ReAct）。"""
-    hit = _quick_greeting_hit(message)
-    if not hit:
-        return None
-    return (
-        "你是「企业知识库AI助手」。用户刚发来一条问候，请直接自然回复。\n"
-        "要求：\n"
-        "1) 先简短接住问候（1 句）；\n"
-        "2) 再用 1-2 句说明你能做什么（上传文档后的检索问答、摘要、制度/资料速查）；\n"
-        "3) 末尾给一个自然引导，鼓励用户上传文档或直接问文档相关问题；\n"
-        "4) 不要使用 ReAct 结构，不要输出 Thought/Action/Observation/Final Answer；\n"
-        "5) 每次表达尽量有变化，口语化，控制在 80 字以内。\n\n"
-        f"用户消息：{hit}"
-    )
-
-
 def quick_interview_greeting_prompt(message: str) -> str | None:
     """AI 面试助手：问候/短句快速路径提示词（不走 ReAct）。"""
     hit = _quick_greeting_hit(message)
@@ -140,24 +123,6 @@ def _normalize_llm_title_line(resp: Any, *, fallback: str) -> str:
     if len(text) > _TITLE_MAX_LEN:
         text = text[:_TITLE_MAX_LEN]
     return text if text else fallback
-
-
-def polish_agent_conversation_title(user_message: str) -> str:
-    """普通 Agent 会话：千问根据首条消息生成简短标题。"""
-    fb = fallback_chat_title(user_message)
-    if not user_message.strip():
-        return "新对话"
-    try:
-        llm = get_qwen_chat_model(temperature=0.3)
-        prompt = (
-            "你是标题助手。根据用户的第一条消息，生成一个简短、通顺的中文会话标题。"
-            f"要求：5～15 个字为宜，不超过 {_TITLE_MAX_LEN} 个字；不要引号、不要标点结尾、不要解释、只输出标题一行。\n\n"
-            f"用户消息：\n{user_message[:800]}"
-        )
-        resp = llm.invoke([HumanMessage(content=prompt)])
-        return _normalize_llm_title_line(resp, fallback=fb)
-    except Exception:
-        return fb
 
 
 def polish_interview_title(user_message: str) -> str:

@@ -19,7 +19,7 @@ from app.services.document_pipeline.user_ingest import (
     ingest_user_document_from_oss,
     purge_user_document,
 )
-from agent.rag.rag import search_hits
+from infrastructure.rag.rag import search_hits
 from config.config import CORPUS_USER
 
 RAW_MD = """# 清洗效果演示

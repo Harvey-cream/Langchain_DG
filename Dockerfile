@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # 后端：FastAPI + LangChain（构建上下文为仓库根目录）
 # LangGraph get_stream_writer 在 async 节点需 Python >= 3.11
 FROM python:3.12-slim-bookworm

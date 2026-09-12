@@ -52,9 +52,9 @@ Async Memory Writer      # 不挡 SSE
 
 | 层 | 说明 |
 |----|------|
-| **Context Builder** | `agent/context_builder.py`；`turn_context` 注入 `configurable`；`retrieved_context` 预填 State |
-| **Retrieval Planner** | `agent/rag/retrieval_planner.py`；一次 LLM 合并原 Gate+Rewrite |
-| **Cascade Router** | `agent/graphs/cascade_route.py`；进 `supervisor_knowledge.route` |
+| **Context Builder** | `runtime/context/builder.py`；`turn_context` 注入 `configurable`；`retrieved_context` 预填 State |
+| **Retrieval Planner** | `infrastructure/rag/retrieval_planner.py`；一次 LLM 合并原 Gate+Rewrite |
+| **Cascade Router** | `products/knowledge/cascade.py`；进 `products/knowledge/supervisor.py` 的 `route` 节点 |
 | **Memory 读** | `should_retrieve_memory` 按需；写路径仍异步后置 |
 
 ## 子 Agent 工程规范（常用）
@@ -62,11 +62,19 @@ Async Memory Writer      # 不挡 SSE
 目录约定（对话线子 Agent 与后置 Agent 共用）：
 
 ```
-agent/graphs/agents/<name>/
+products/<line>/subagents/<name>/
   __init__.py     # 只导出 build_<name>_graph
   graph.py        # StateGraph：节点函数 + 边 + compile()
   prompts.py      # 本 Agent 系统提示（与 graph 同目录，勿集中到 runtime）
   schemas.py      # 可选：Pydantic 结构化输出
+```
+
+分层边界（硬约束）：
+
+```
+products/knowledge  ✗→  products/interview      两条线互不 import
+products/*          ✓→  runtime/ infrastructure/
+runtime/            ✗→  products/               Runtime 不含业务
 ```
 
 | 规范 | 说明 |
@@ -75,14 +83,14 @@ agent/graphs/agents/<name>/
 | **工厂** | `build_<name>_graph(...)`；对话子图默认 **不自带 checkpointer**（由 Supervisor/`stream` 外层挂） |
 | **节点** | `async def` 写在 `build_*` 内（与 `doc_summary` / `knowledge_qa` 一致） |
 | **结构化输出** | LLM 决策用 **Pydantic + `with_structured_output`**（总控 `RouteDecision`、Memory `ExtractResult`/`DecideResult`、Planner `RetrievalPlan`） |
-| **说明书** | 知识库线子 Agent 在 `knowledge_subagents.py` 写职责/何时用/何时不用，供 Supervisor 分诊 |
+| **说明书** | 知识库线子 Agent 在 `products/knowledge/subagents/registry.py` 写职责/何时用/何时不用，供 Supervisor 分诊 |
 | **两条线隔离** | 知识库 / 面试顶层互不调用；跨线只共用底座 |
 | **Memory 例外** | **不进** 任一线路由顶层；专用 `MemoryAgentState`；无 SSE、无 checkpointer；SSE 落库后 `ainvoke` |
 
 对话子图典型边：`START → skill_recall → agent (↔ tools) → END`。  
 Memory 写图：`START → trigger → extract → apply → END`。
 
-参考实现：`agents/doc_summary`、`agents/knowledge_qa`、`agents/memory`；总控：`supervisor_knowledge.py`。
+参考实现：`products/knowledge/subagents/{doc_summary,knowledge_qa}`、`infrastructure/memory/agent`；总控：`products/knowledge/supervisor.py`。
 
 ## Agent 视图
 
@@ -110,10 +118,10 @@ Memory 写图：`START → trigger → extract → apply → END`。
 └─────────────────────────────────────────────────────────────┘
 ```
 
-- **线内顶层路由（Supervisor）**：企业知识库线、面试线各有一个**路由型顶层 Graph**（不写长答案）。知识库线：`Cascade Router`（高置信规则短路）+ Supervisor LLM 兜底；见 `supervisor_knowledge` / `cascade_route`。默认 LLM 分诊；仅高置信意图允许规则短路。
+- **线内顶层路由（Supervisor）**：知识库线为**路由型顶层 Graph**（不写长答案）：`Cascade Router`（高置信规则短路）+ Supervisor LLM 兜底，见 `products/knowledge/{supervisor,cascade}.py`。默认 LLM 分诊；仅高置信意图允许规则短路。面试线当前为单图（`products/interview/runtime.py`），线内 Supervisor + 子 Agent 为后续扩展位。
 - **两条线严禁串联**：两边顶层互不调用、不共用一张总控图；前端分入口，只共用底座（图工厂 / RAG / SSE 等）。线内子 Agent 可串联（如面试 `JD → 模拟 → 评估`），跨线不可。
 - **Memory Agent**：异步后置，挂在主回复之后，不并入任一线路由顶层。
-- **子 Agent 定义**：每个子 Agent 有独立说明书（职责 / 何时用 / 何时不用），交给总控 LLM；**各自独立子图**（自有节点与边，见 `agent/graphs/agents/`），图内仍可有 Skill 集。
+- **子 Agent 定义**：每个子 Agent 有独立说明书（职责 / 何时用 / 何时不用），交给总控 LLM；**各自独立子图**（自有节点与边，见 `products/knowledge/subagents/`），图内仍可有 Skill 集。
 
 ## Agent 说明
 
@@ -171,7 +179,7 @@ Workflow 按意图路由子 Agent，可串联：`JD → 模拟 → 评估`。
 
 | 项 | 说明 |
 |----|------|
-| **包路径** | `agent/graphs/agents/memory`（`build_memory_agent_graph`） |
+| **包路径** | `infrastructure/memory/agent`（`build_memory_agent_graph`） |
 | **时机** | 主回复流式结束、会话落库之后；`asyncio.create_task` → `ainvoke`，不挡 SSE |
 | **Trigger** | 规则过滤（长度 / 偏好关键词等）；无长期价值直接 END |
 | **流水线** | `trigger → extract → apply`；Extract/Decide 用 Pydantic；apply 内 search→decide→upsert |

@@ -1,0 +1,18 @@
+{
+  "gitee": {
+    "transport": "streamable_http",
+    "url": "https://api.gitee.com/mcp",
+    "headers": {
+      "Authorization": "Bearer d6d7867c5172b5b6e9ef2ce915556a79"
+    }
+  },
+  "github": {
+    "transport": "streamable_http",
+    "url": "https://api.githubcopilot.com/mcp/",
+    "headers": {
+      "Authorization": "Bearer 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",
+      "X-MCP-Toolsets": "repos",
+      "X-MCP-Readonly": "true"
+    }
+  }
+}

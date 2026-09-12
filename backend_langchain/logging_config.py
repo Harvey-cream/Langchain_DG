@@ -9,12 +9,11 @@ LOGGING = {
     },
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
-        "agent.graph_factory": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "agent.rag.embedding": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "agent.rag.skill_router": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "agent.tools": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "app.routers.api": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "agent.mcp.mcp_multiserver": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "runtime.execution.graph_factory": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "infrastructure.rag.embedding": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "infrastructure.rag.skill_router": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "infrastructure.pdf.schema_tools": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "infrastructure.mcp.mcp_multiserver": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "huggingface_hub": {"handlers": ["console"], "level": "CRITICAL", "propagate": False},
         "huggingface_hub.utils._http": {
             "handlers": ["console"],

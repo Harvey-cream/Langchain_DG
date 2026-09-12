@@ -122,6 +122,11 @@
   box-shadow: 0 8px 24px rgba(13, 148, 136, 0.45);
 }
 
+.home-card-icon--contract {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  box-shadow: 0 8px 24px rgba(217, 119, 6, 0.45);
+}
+
 .home-card-title {
   margin: 0 0 0.5rem;
   font-size: clamp(1rem, 2.8vw, 1.15rem);
