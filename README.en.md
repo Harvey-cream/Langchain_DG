@@ -14,21 +14,9 @@ The platform follows a **Workflow First, Agent Second** philosophy that decouple
 
 > The repository's earlier positioning — a "multi-agent chat app / enterprise knowledge-base Q&A" — has evolved. **Contract is the primary product line.** The enterprise Knowledge product has been retired; its reusable retrieval / embedding / pgvector capabilities remain as shared infrastructure. The Interview Agent is kept as an independent product line, but it is no longer the project's focus.
 
-### Status Legend
-
-Every capability is tagged so planned work is never mistaken for something shipped:
-
-| Tag | Meaning |
-|-----|---------|
-| **Available** | Implemented and runnable |
-| **In Progress** | Architecture settled, under development |
-| **Planned** | On the roadmap, not yet started |
-
----
-
 ## Features
 
-### Contract Domain & Versioning — Available
+### Contract Domain & Versioning
 
 - **Customer / Contract / ContractVersion** domain entities and application services
 - **Append-only version model**: the `Contract ID` is stable while `V1 / V2 / V3` are full snapshots; history is never overwritten
@@ -36,38 +24,38 @@ Every capability is tagged so planned work is never mistaken for something shipp
 - **Version numbering and history tracking**: monotonic version numbers with a unique `(contract_id, number)` constraint
 - Full CRUD APIs for customers, contracts and contract versions
 
-### Document Intelligence — In Progress
+### Document Intelligence
 
 - PDF / Markdown / TXT parsing plus a clean-and-chunk pipeline
 - Embedding ingestion into pgvector for retrieval
-- **Structured `ContractClause` extraction** is being integrated as the input to the review workflow
+- **Structured `ContractClause` extraction** as the input to the review workflow
 
-### AI Risk Review — Planned
+### AI Risk Review
 
 - **Review Workflow** for contract clauses
 - **RiskFinding**: structured risk output
 - **ContractPolicy / RAG context**: enterprise policies and historical contracts as retrieval context
 - Pydantic structured output to constrain LLM decisions
 
-### Human-in-the-loop — Planned
+### Human-in-the-loop
 
 - AI never overwrites a contract directly; risks are first turned into a **Revision Proposal**
 - A human **accepts / rejects / edits**, which produces a **new ContractVersion**
 - Explicit principle: **AI suggestion ≠ final business decision**
 
-### Contract Diff & Negotiation — Planned
+### Contract Diff & Negotiation
 
 - **Diff Engine**: `previous version + current version → structured changes`
 - **Negotiation Agent**: revision suggestions and talking points grounded in the diff and ContractPolicy
 
-### Agent Runtime — Available
+### Agent Runtime
 
 - **LangGraph** state graphs and resumable execution
 - **PostgreSQL Checkpoint** for agent runtime state, supporting interrupt / resume
 - **SSE streaming** with a pre-graph Context Builder that prepares History / Memory / RAG context in parallel
 - **Context Builder** under `runtime/context`
 
-### Platform Capabilities — Available
+### Platform Capabilities
 
 - **PostgreSQL + pgvector** for business data, vectors and checkpoints
 - **RAG**: embedding / rerank / retrieval planner
@@ -158,16 +146,16 @@ The full contract pipeline under the target architecture:
    Upload PDF / Markdown
           │
           ▼
-      ContractVersion                    ── Available
+      ContractVersion
           │
           ▼
-   Document Intelligence                 ── In Progress
+   Document Intelligence
           │
           ▼
      ContractClause
           │
           ▼
-     Review Workflow                     ── Planned
+     Review Workflow
           │
           ▼
       RiskFinding

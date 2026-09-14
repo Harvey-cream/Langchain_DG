@@ -14,21 +14,9 @@ LangChain DG 是一个**企业合同全生命周期 AI Agent 平台**。系统�
 
 > 本仓库此前的“多 Agent 对话应用 / 企业知识库问答”定位已经演进。**Contract 是当前第一产品线**；企业知识库（Knowledge）产品已退休，其可复用的 retrieval / embedding / pgvector 能力继续作为底层能力服务新产品。Interview Agent 作为独立产品线保留，但不再是项目主线。
 
-### 状态说明
-
-README 中每项能力标注状态，避免把规划能力误读为已上线：
-
-| 标识 | 含义 |
-|------|------|
-| **Available** | 已实现并可运行 |
-| **In Progress** | 架构已定、正在开发 |
-| **Planned** | 已纳入路线图，尚未开始 |
-
----
-
 ## 核心能力
 
-### 合同领域与版本模型 — Available
+### 合同领域与版本模型
 
 - **Customer / Contract / ContractVersion** 领域实体与用例服务
 - **append-only 版本模型**：`Contract ID` 稳定，`V1 / V2 / V3` 为完整快照，历史版本不覆盖
@@ -36,38 +24,38 @@ README 中每项能力标注状态，避免把规划能力误读为已上线：
 - **版本编号与历史追踪**：版本号单调递增，`(contract_id, number)` 唯一
 - Customer / Contract / ContractVersion 的完整 CRUD API
 
-### 文档智能 — In Progress
+### 文档智能
 
 - PDF / Markdown / TXT 文档解析与清洗切块流水线
 - 面向检索的 embedding 入库（pgvector）
-- **结构化 `ContractClause` 抽取**正在接入，作为审查工作流的输入
+- **结构化 `ContractClause` 抽取**，作为审查工作流的输入
 
-### AI 风险审查 — Planned
+### AI 风险审查
 
 - **Review Workflow**：面向合同条款的审查工作流
 - **RiskFinding**：结构化风险点输出
 - **ContractPolicy / RAG 上下文**：以企业政策与历史合同为检索上下文
 - 采用 Pydantic 结构化输出约束 LLM 决策
 
-### Human-in-the-loop — Planned
+### Human-in-the-loop
 
 - AI 不直接覆盖合同，风险点先转为 **Revision Proposal**
 - 人工 **Accept / Reject / Edit** 后生成**新 ContractVersion**
 - 明确原则：**AI suggestion ≠ final business decision**
 
-### 合同 Diff 与谈判辅助 — Planned
+### 合同 Diff 与谈判辅助
 
 - **Diff Engine**：`Previous Version + Current Version → 结构化变更`
 - **谈判辅助 Agent**：基于 Diff 与 ContractPolicy 生成修改建议与话术
 
-### Agent Runtime — Available
+### Agent Runtime
 
 - **LangGraph** 状态图与可恢复执行
 - **PostgreSQL Checkpoint**：保存 Agent 运行时状态，支持 interrupt / resume
 - **SSE 流式**：图前 Context Builder 并行准备 History / Memory / RAG 上下文
 - **Context Builder**：`runtime/context`，图前并行装配上下文
 
-### 平台能力 — Available
+### 平台能力
 
 - **PostgreSQL + pgvector**：业务库、向量库、Checkpoint 库
 - **RAG**：Embedding / Rerank / Retrieval Planner
@@ -158,16 +146,16 @@ Document Parser、Diff Engine、Version Manager、PDF Renderer、Email Worker �
    用户上传 PDF / Markdown
           │
           ▼
-      ContractVersion                    ── Available
+      ContractVersion
           │
           ▼
-   Document Intelligence                 ── In Progress
+   Document Intelligence
           │
           ▼
      ContractClause
           │
           ▼
-     Review Workflow                     ── Planned
+     Review Workflow
           │
           ▼
       RiskFinding
