@@ -346,7 +346,7 @@ The Interview Agent remains as an independent product line, business-isolated fr
 
 ### Legacy Knowledge Base
 
-The enterprise Knowledge product has been retired: `knowledge/docs1` and the old vector data are archived under `knowledge/_retired_agent_corpus/`, with the table-archive script at `migrations/0002_retire_knowledge_data.py` (run explicitly, reversible).
+The legacy Agent corpus `docs1` is still retained as the current corpus and has migrated to PostgreSQL/pgvector; the old Chroma vector files have been removed. The table-archive script is at `migrations/0002_retire_knowledge_data.py` (run explicitly, reversible).
 
 Note that the **Knowledge product is not the same as RAG capability**. What was retired is the knowledge-base Q&A product; its reusable retrieval / embedding / pgvector capabilities remain as shared infrastructure.
 

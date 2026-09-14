@@ -346,7 +346,7 @@ npm run dev
 
 ### Legacy 知识库
 
-企业知识库（Knowledge）产品已退休：`knowledge/docs1` 与旧向量数据归档在 `knowledge/_retired_agent_corpus/`，相关表归档脚本见 `migrations/0002_retire_knowledge_data.py`（显式执行，可回滚）。
+旧版 Agent 语料 `docs1` 仍作为当前语料保留，并已迁移到 PostgreSQL/pgvector；旧的 Chroma 向量文件已删除。相关数据库表归档脚本见 `migrations/0002_retire_knowledge_data.py`（显式执行，可回滚）。
 
 需要说明的是：**Knowledge 产品 ≠ RAG 能力**。退休的是知识库问答产品，其中可复用的 retrieval / embedding / pgvector 能力继续作为底层能力服务新产品。
 
