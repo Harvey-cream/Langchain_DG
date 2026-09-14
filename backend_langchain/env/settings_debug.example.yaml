@@ -26,8 +26,8 @@ redis:
 llm:
   base_url: "${LLM_AGENT_BASE_URL:-https://api4.mygptlife.com/v1/}"
   api_key: "${LLM_AGENT_API_KEY:-}"
-  model: "${LLM_AGENT_MODEL:-claude-sonnet-4-6}"
-  fallback_models: "${LLM_AGENT_FALLBACK_MODELS:-gpt-5.6-luna,gemini-3.7-flash}"
+  model: "${LLM_AGENT_MODEL:-gemini-3.7-flash}"
+  fallback_models: "${LLM_AGENT_FALLBACK_MODELS:-gpt-5.6-luna,claude-sonnet-4-6}"
 
 dashscope:
   api_key: "${DASHSCOPE_API_KEY:-}"

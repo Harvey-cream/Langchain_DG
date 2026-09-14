@@ -89,6 +89,7 @@ export const sendUploadRequest = async (url: string, data: FormData): Promise<an
   const config: AxiosRequestConfig = {
     url,
     method: 'POST',
+    timeout: 120000,
     data,
     headers: {
       'Content-Type': 'multipart/form-data',

@@ -68,7 +68,7 @@ class SqlAlchemyContractRepository(ContractRepository):
 
     async def get(self, user_id: int, contract_id: UUID) -> Contract | None:
         result = await self.session.execute(
-            select(ContractModel).where(ContractModel.user_id == user_id, ContractModel.id == contract_id)
+            select(ContractModel).where(ContractModel.user_id == user_id, ContractModel.id == contract_id).with_for_update()
         )
         model = result.scalar_one_or_none()
         return _contract_entity(model) if model else None

@@ -11,6 +11,10 @@ frontend_langchain/node_modules
 dist
 dist-ssr
 *.local
+# Frontend build and test artifacts
+frontend_langchain/coverage/
+frontend_langchain/playwright-report/
+frontend_langchain/test-results/
 
 # Editor directories and files
 .vscode/*
@@ -43,6 +47,9 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.pytest_cache/
+.coverage
+coverage/
 build/
 develop-eggs/
 dist/
@@ -97,6 +104,13 @@ backend_langchain/agent/mcp/mcp_servers.json
 # Chroma 旧目录（已迁 pgvector，若本地仍有残留目录勿提交）
 backend_langchain/knowledge/chroma/
 backend_langchain/knowledge/chroma_db/
+**/chroma.sqlite3
+
+# Local SQLite databases and journals（开发运行时生成，勿提交）
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+*.db
 
 # 清洗/切块预览与基准输出（脚本生成，勿提交）
 backend_langchain/app/data/runtime/clean_chunk_preview/

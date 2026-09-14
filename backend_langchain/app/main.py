@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.db import init_db_tables
 from app.routers import contract, customer, interview, user
+from app.routers import contract_analysis
 from app.settings import MEDIA_ROOT
 from runtime.checkpoint.checkpointer import close_checkpointer, init_checkpointer
 from logging_config import LOGGING
@@ -103,6 +104,7 @@ app.include_router(user.router)
 app.include_router(interview.router)
 app.include_router(customer.router)
 app.include_router(contract.router)
+app.include_router(contract_analysis.router)
 
 
 @app.get("/health")

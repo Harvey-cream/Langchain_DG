@@ -38,10 +38,14 @@ def _apply_session_column_patches(sync_conn) -> None:
 async def init_db_tables() -> None:
     """启动时创建缺失表，并补齐已有会话表的 status/token 列。"""
     from app.models import Base
+    from infrastructure.db.models.analysis import AnalysisRunModel
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_apply_session_column_patches)
+        await conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_contract_version_number ON contract_versions (contract_id, number)'))
+        # Demo uses a single API process. Interrupted jobs become retryable after restart.
+        await conn.execute(text("UPDATE contract_analysis_runs SET status='failed', error='服务重启中断了分析，请重新分析' WHERE status IN ('pending','parsing','analyzing')"))
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

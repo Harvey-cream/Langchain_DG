@@ -1,0 +1,251 @@
+body:has(.contract-shell) {
+  display: block;
+  background: #f4f6fa;
+  color: #17243b;
+}
+#root:has(.contract-shell) {
+  max-width: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+}
+.contract-shell {
+  min-height: 100vh;
+  padding: 0 5vw 48px;
+  background: #f4f6fa;
+  color: #17243b;
+  font-family: Inter, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  color-scheme: light;
+}
+.contract-nav {
+  min-height: 76px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #dfe5ee;
+  gap: 20px;
+}
+.contract-nav span {
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: #66758c;
+  margin-left: 16px;
+}
+.contract-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 40px 0 30px;
+  gap: 24px;
+}
+.contract-heading h1 {
+  font-size: clamp(24px, 3vw, 36px);
+  margin: 8px 0 12px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.contract-heading p,
+.contract-placeholder p {
+  color: #738095;
+}
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: #4967bd;
+  font-weight: 700;
+}
+.contract-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.version-select {
+  min-width: 180px;
+  max-width: min(300px, 85vw);
+}
+.contract-panel {
+  background: white;
+  border: 1px solid #e1e7ef;
+  border-radius: 16px;
+  padding: 24px;
+  min-width: 0;
+  box-shadow: 0 4px 20px #25385604;
+}
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.panel-heading h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.contract-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin-bottom: 28px;
+}
+.contract-stats > div {
+  background: white;
+  border: 1px solid #e1e7ef;
+  border-radius: 12px;
+  padding: 20px 24px;
+}
+.contract-stats span {
+  display: block;
+  color: #718096;
+  font-size: 13px;
+}
+.contract-stats strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 25px;
+}
+.contract-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 18px;
+}
+.contract-tile {
+  text-align: left;
+  background: #fff;
+  color: #17243b;
+  border: 1px solid #e2e8f0;
+  padding: 24px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.contract-tile:hover {
+  border-color: #7395e9;
+  box-shadow: 0 6px 18px #24469b0d;
+}
+.contract-tile h3 {
+  overflow-wrap: anywhere;
+  font-size: 17px;
+}
+.contract-tile p {
+  color: #748197;
+  font-size: 13px;
+}
+.document-icon {
+  display: inline-flex;
+  padding: 8px 12px;
+  background: #edf2ff;
+  color: #4264b5;
+  border-radius: 8px;
+}
+.tile-link {
+  display: block;
+  margin-top: 25px;
+  color: #4164b8;
+  font-size: 13px;
+}
+.contract-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+.contract-document {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 75vh;
+  overflow: auto;
+  line-height: 2;
+  padding: 20px;
+  background: #fafbfd;
+  font-family: inherit;
+  font-size: 14px;
+}
+.contract-placeholder {
+  padding: 64px 12px;
+  text-align: center;
+}
+.contract-placeholder .ant-empty {
+  margin-bottom: 24px;
+}
+.analysis-summary p {
+  line-height: 1.9;
+}
+.analysis-summary dl {
+  display: grid;
+  grid-template-columns: 85px 1fr;
+  gap: 12px;
+  font-size: 14px;
+}
+.analysis-summary dt {
+  color: #758198;
+}
+.analysis-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.risk-counts {
+  display: flex;
+  gap: 16px;
+  padding: 20px 0;
+  font-size: 13px;
+}
+.risk-counts b {
+  margin-left: 8px;
+  font-size: 20px;
+}
+.risk-card {
+  border: 1px solid #e5e9f0;
+  border-left: 3px solid #668bd6;
+  border-radius: 10px;
+  padding: 20px;
+  margin: 0 0 18px;
+  line-height: 1.8;
+  font-size: 14px;
+}
+.risk-card.high {
+  border-left-color: #d85d5d;
+}
+.risk-card.medium {
+  border-left-color: #dba44e;
+}
+.risk-card h3 {
+  margin: 8px 0;
+  font-size: 16px;
+}
+.risk-card blockquote {
+  margin: 12px 0;
+  padding: 12px;
+  background: #f6f7fa;
+  color: #677287;
+  white-space: pre-wrap;
+}
+.risk-suggestion {
+  background: #f0f6ff;
+  padding: 12px;
+  border-radius: 8px;
+}
+.risk-suggestion p {
+  margin: 6px 0;
+}
+.analysis-note {
+  color: #8591a3;
+  font-size: 12px;
+}
+@media (max-width: 900px) {
+  .contract-columns {
+    grid-template-columns: 1fr;
+  }
+  .contract-heading {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .contract-stats {
+    gap: 8px;
+  }
+  .contract-stats > div {
+    padding: 16px;
+  }
+  .contract-nav > span {
+    display: none;
+  }
+}
