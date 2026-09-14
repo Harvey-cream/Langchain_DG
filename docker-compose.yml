@@ -43,14 +43,22 @@ services:
     env_file:
       - .env
     environment:
+      # APP_ENV 动态读取（来自根 .env / shell）：本地 .env=debug 就用 debug，生产服务器=production。
       APP_ENV: ${APP_ENV:-production}
+      # DB 地址只由“运行位置”决定，与 APP_ENV 无关：
+      #   - 容器内（compose 网络）：服务名 db:5432
+      #   - 宿主机（本地 uvicorn 直连映射端口）：.env 里的 localhost:5433
+      # 这里必须写死“容器内地址”，不能回退成 ${POSTGRES_HOST}：否则会取到 .env 的 localhost，
+      # 在容器里连不到 DB（之前 Restarting 崩溃就是这个原因）。
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DATABASE: ${POSTGRES_DATABASE:-langchain}
       # 与 settings_pro.yaml postgres.checkpoint_database 对应；库由 init_checkpointer 自动创建
       POSTGRES_CHECKPOINT_DATABASE: ${POSTGRES_CHECKPOINT_DATABASE:-langchain_checkpoint}
-      # 以下由 .env 注入，供 settings_pro.yaml 中 ${OPENAI_API_KEY} 等插值
-      # OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL
+      # 以下由 .env 注入，供 settings_pro.yaml 中 ${LLM_AGENT_*} 等插值
+      # LLM_AGENT_BASE_URL / LLM_AGENT_API_KEY / LLM_AGENT_MODEL / LLM_AGENT_FALLBACK_MODELS
       # DASHSCOPE_API_KEY / APP_SECRET_KEY / APP_ALLOWED_HOST
       SKIP_RAG_STARTUP_WARMUP: ${SKIP_RAG_STARTUP_WARMUP:-}
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
@@ -62,6 +70,10 @@ services:
       - huggingface_cache:/root/.cache/huggingface
       - ./media:/app/media
       - ./backend_langchain/env/settings_pro.yaml:/app/env/settings_pro.yaml:ro
+    ports:
+      # 便于宿主机直连后端（前端 Vite 代理 / 本地调试）；对外入口仍是 nginx:80。
+      # 与本地 uvicorn(:8000) 同时使用会端口冲突，二选一。
+      - "127.0.0.1:${BACKEND_PUBLISH_PORT:-8000}:8000"
     expose:
       - "8000"
     networks:

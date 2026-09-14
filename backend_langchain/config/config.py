@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any, Optional
@@ -18,6 +19,9 @@ from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
 from app.settings import dashscope_config, llm_config, rag_config
+from config.failover import FailoverLLM
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 路径
@@ -160,14 +164,37 @@ class _AgentStreamChatOpenAI(ChatOpenAI):
         )
 
 
-def get_qwen_chat_model(temperature: float = 0.7, *, streaming: bool = False) -> Any:
-    llm = llm_config()
-    if not llm["api_key"]:
+_chain_logged = False
+
+
+def _resolve_model_chain(llm: dict[str, Any]) -> list[str]:
+    """生效链 = [主模型] + 兜底模型（去空、去重、保序；主模型重复出现只保留一次）。"""
+    primary = str(llm.get("model") or "").strip()
+    if not primary:
         raise RuntimeError(
-            "未配置对话 LLM：请在 settings_*.yaml 的 llm.api_key 或环境变量 OPENAI_API_KEY 中设置"
+            "未配置对话 LLM 主模型：请设置 LLM_AGENT_MODEL（或 settings yaml llm.model）"
         )
+    chain = [primary]
+    for name in llm.get("fallback_models") or []:
+        candidate = str(name).strip()
+        if candidate and candidate not in chain:
+            chain.append(candidate)
+    return chain
+
+
+def _log_chain_once(chain: list[str]) -> None:
+    global _chain_logged
+    if _chain_logged:
+        return
+    _chain_logged = True
+    logger.info("[LLM] chain = %s", " -> ".join(chain))
+
+
+def _build_chat_model(
+    llm: dict[str, Any], model_name: str, *, temperature: float, streaming: bool
+) -> Any:
     common = dict(
-        model=llm["model"],
+        model=model_name,
         api_key=llm["api_key"],
         base_url=llm["base_url"],
         temperature=temperature,
@@ -175,6 +202,30 @@ def get_qwen_chat_model(temperature: float = 0.7, *, streaming: bool = False) ->
     if streaming:
         return _AgentStreamChatOpenAI(**common, streaming=True)
     return ChatOpenAI(**common)
+
+
+def get_qwen_chat_model(temperature: float = 0.7, *, streaming: bool = False) -> Any:
+    """返回对话 LLM：链上每个模型各建一个原生实例，包成顺序兜底。
+
+    调用方零改动——既可 invoke/astream，也可 bind_tools / with_structured_output。
+    无兜底配置时返回原生实例，行为与改造前完全一致。
+    """
+    llm = llm_config()
+    if not llm["api_key"]:
+        raise RuntimeError(
+            "未配置对话 LLM：请在 settings_*.yaml 的 llm.api_key 或环境变量 "
+            "LLM_AGENT_API_KEY 中设置"
+        )
+    chain = _resolve_model_chain(llm)
+    _log_chain_once(chain)
+
+    instances = [
+        _build_chat_model(llm, name, temperature=temperature, streaming=streaming)
+        for name in chain
+    ]
+    if len(instances) == 1:
+        return instances[0]
+    return FailoverLLM(instances, labels=chain)
 
 
 if __name__ == "__main__":

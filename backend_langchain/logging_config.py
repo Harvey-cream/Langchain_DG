@@ -9,6 +9,8 @@ LOGGING = {
     },
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
+        "config.config": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "config.failover": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "runtime.execution.graph_factory": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "infrastructure.rag.embedding": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "infrastructure.rag.skill_router": {"handlers": ["console"], "level": "INFO", "propagate": False},

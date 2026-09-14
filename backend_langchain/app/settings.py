@@ -122,12 +122,41 @@ def _section(name: str) -> dict[str, Any]:
     return block if isinstance(block, dict) else {}
 
 
-def llm_config() -> dict[str, str]:
+def _first_env_or(section: dict[str, Any], env: str, keys: tuple[str, ...]) -> str:
+    """优先读环境变量（.env），否则按顺序回退到 yaml 键。"""
+    env_val = os.environ.get(env)
+    if env_val and env_val.strip():
+        return env_val.strip()
+    for key in keys:
+        val = section.get(key)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    return ""
+
+
+def _split_model_list(raw: Any) -> list[str]:
+    """逗号分隔 → 去空、去重、保序。"""
+    items = raw if isinstance(raw, (list, tuple)) else str(raw or "").split(",")
+    out: list[str] = []
+    for item in items:
+        name = str(item).strip()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def llm_config() -> dict[str, Any]:
     llm = _section("llm")
     return {
-        "base_url": str(llm.get("base_url") or llm.get("agent_base_url") or "").strip(),
-        "api_key": str(llm.get("api_key") or llm.get("agent_api_key") or "").strip(),
-        "model": str(llm.get("model") or llm.get("agent_model") or "").strip(),
+        "base_url": _first_env_or(llm, "LLM_AGENT_BASE_URL", ("agent_base_url", "base_url")),
+        "api_key": _first_env_or(llm, "LLM_AGENT_API_KEY", ("agent_api_key", "api_key")),
+        "model": _first_env_or(llm, "LLM_AGENT_MODEL", ("agent_model", "model")),
+        "fallback_models": _split_model_list(
+            os.environ.get("LLM_AGENT_FALLBACK_MODELS")
+            or llm.get("fallback_models")
+            or llm.get("agent_fallback_models")
+            or ""
+        ),
     }
 
 
