@@ -92,6 +92,22 @@ test.beforeEach(async ({ page }) => {
   await setup(page);
 });
 
+test('expired token clears the session and redirects to login', async ({ page }) => {
+  await page.unrouteAll({ behavior: 'wait' });
+  await page.goto('/login');
+  await page.evaluate(() => localStorage.setItem('token', 'expired-token'));
+  await page.route('http://127.0.0.1:5180/api/**', (route) =>
+    route.fulfill({ status: 401, json: { success: false, msg: '认证失败，请重新登录' } }),
+  );
+
+  const unauthorized = page.waitForResponse((response) => response.status() === 401);
+  await page.goto('/contracts');
+  await unauthorized;
+
+  await expect(page).toHaveURL(/\/login$/);
+  expect(await page.evaluate(() => localStorage.getItem('token'))).toBeNull();
+});
+
 test('workbench searches contracts and opens the review', async ({ page }) => {
   await page.goto('/contracts');
   await expect(page.getByRole('heading', { name: '把合同看清楚，再做决定。' })).toBeVisible();

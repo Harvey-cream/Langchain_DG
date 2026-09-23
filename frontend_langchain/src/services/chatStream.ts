@@ -1,3 +1,5 @@
+import { expireAuthSession, handleUnauthorizedStatus } from './authSession';
+
 /**
  * 流式对话：展示清洗 + SSE 拉流（与 api.ts 里基于 axios 的 sendRequest 分离）。
  * 流式必须用浏览器原生 fetch + ReadableStream，才能读 body 流；sendRequest 不适合 SSE。
@@ -39,7 +41,7 @@ function insertStreamingBoundaries(text: string): string {
   // 常见流式粘连：pythonfrom / javapublic 等，先拆成两段。
   out = out.replace(
     /\b(java|python|javascript|typescript|go|rust|bash|sql)(?=(from|import|class|public|def|const|let|var)\b)/gi,
-    '$1\n'
+    '$1\n',
   );
   return out;
 }
@@ -81,10 +83,7 @@ function repairStreamingMarkdown(text: string, streaming: boolean): string {
 /**
  * 流式与结束后同一套清洗入口；streaming 控制是否对「未闭合」结构做假补全。
  */
-export function formatAssistantDisplayText(
-  raw: string,
-  options?: { streaming?: boolean }
-): string {
+export function formatAssistantDisplayText(raw: string, options?: { streaming?: boolean }): string {
   const streaming = Boolean(options?.streaming);
   let s = stripInlineToolBlocks((raw || '').trim());
   if (!s) return '';
@@ -138,7 +137,7 @@ export function estimateChatStreamPayloadBytes(
   message: string,
   conversationId: number | undefined,
   attachments: ChatAttachment[],
-  options?: { enableWebSearch?: boolean; resumePdfExport?: boolean }
+  options?: { enableWebSearch?: boolean; resumePdfExport?: boolean },
 ): number {
   return new Blob([
     JSON.stringify({
@@ -187,10 +186,11 @@ async function chatWithStreamAt(
     resumePdfExport?: boolean;
     enableWebSearch?: boolean;
     attachments?: ChatAttachment[];
-  }
+  },
 ): Promise<void> {
   const token = localStorage.getItem('token');
   if (!token) {
+    expireAuthSession();
     throw new Error('未登录');
   }
 
@@ -232,6 +232,9 @@ async function chatWithStreamAt(
 
   if (!res.ok) {
     if (idleTimer !== undefined) clearTimeout(idleTimer);
+    if (handleUnauthorizedStatus(res.status)) {
+      throw new Error('登录已失效，请重新登录');
+    }
     if (res.status === 413) {
       throw new Error(PAYLOAD_TOO_LARGE_MESSAGE);
     }
@@ -270,36 +273,36 @@ async function chatWithStreamAt(
         scheduleIdle();
       }
       buffer += decoder.decode(value, { stream: true });
-// // 数据切割流程：
-// 1. 后端推数据
-//    → 二进制数据块 value (Uint8Array)
+      // // 数据切割流程：
+      // 1. 后端推数据
+      //    → 二进制数据块 value (Uint8Array)
 
-// 2. 前端转文字
-//    → buffer += decoder.decode(value, { stream: true })
-//    → 缓冲区 buffer (字符串)
+      // 2. 前端转文字
+      //    → buffer += decoder.decode(value, { stream: true })
+      //    → 缓冲区 buffer (字符串)
 
-// 3. 切出一条完整消息
-//    → const rawEvent = buffer.slice(0, idx)
-//    → rawEvent (字符串，例如："data: {\"type\":\"delta\",\"text\":\"你好\"}")
+      // 3. 切出一条完整消息
+      //    → const rawEvent = buffer.slice(0, idx)
+      //    → rawEvent (字符串，例如："data: {\"type\":\"delta\",\"text\":\"你好\"}")
 
-// 4. 找到 data: 开头的行
-//    → const line = rawEvent.split('\n').find(l => l.startsWith('data: '))
-//    → line (字符串，例如："data: {\"type\":\"delta\",\"text\":\"你好\"}")
+      // 4. 找到 data: 开头的行
+      //    → const line = rawEvent.split('\n').find(l => l.startsWith('data: '))
+      //    → line (字符串，例如："data: {\"type\":\"delta\",\"text\":\"你好\"}")
 
-// 5. 提取 JSON 字符串
-//    → const jsonStr = line.slice(6).trim()
-//    → jsonStr (字符串，例如："{\"type\":\"delta\",\"text\":\"你好\"}")
-//    【看这里！slice(6) 去掉了前面的 "data: "】
+      // 5. 提取 JSON 字符串
+      //    → const jsonStr = line.slice(6).trim()
+      //    → jsonStr (字符串，例如："{\"type\":\"delta\",\"text\":\"你好\"}")
+      //    【看这里！slice(6) 去掉了前面的 "data: "】
 
-// 6. 【你问的】解析 JSON
-//    → data = JSON.parse(jsonStr)
-//    → data (对象，例如：{ type: "delta", text: "你好" })
-// // 
+      // 6. 【你问的】解析 JSON
+      //    → data = JSON.parse(jsonStr)
+      //    → data (对象，例如：{ type: "delta", text: "你好" })
+      // //
       let idx: number;
       while ((idx = buffer.indexOf('\n\n')) >= 0) {
         const rawEvent = buffer.slice(0, idx);
         buffer = buffer.slice(idx + 2);
-        const line = rawEvent.split('\n').find(l => l.startsWith('data: '));
+        const line = rawEvent.split('\n').find((l) => l.startsWith('data: '));
         if (!line) continue;
         const jsonStr = line.slice(6).trim();
         if (!jsonStr) continue;
@@ -320,7 +323,10 @@ async function chatWithStreamAt(
         }
         const t = data.type;
         if (t === 'meta' && data.conversation_id != null && data.session_id != null) {
-          callbacks.onMeta?.({ conversation_id: data.conversation_id, session_id: data.session_id });
+          callbacks.onMeta?.({
+            conversation_id: data.conversation_id,
+            session_id: data.session_id,
+          });
         } else if (t === 'ping') {
           callbacks.onPing?.();
         } else if (t === 'status' && data.text != null) {
@@ -328,11 +334,11 @@ async function chatWithStreamAt(
         } else if (t === 'web_sources' && Array.isArray((data as { sources?: unknown }).sources)) {
           const raw = (data as { sources: Array<{ title?: unknown; url?: unknown }> }).sources;
           const sources: WebSource[] = raw
-            .map(s => ({
+            .map((s) => ({
               title: String(s?.title ?? '').trim() || String(s?.url ?? ''),
               url: String(s?.url ?? '').trim(),
             }))
-            .filter(s => s.url);
+            .filter((s) => s.url);
           if (sources.length) {
             callbacks.onWebSources?.(sources);
           }
@@ -344,7 +350,7 @@ async function chatWithStreamAt(
               typeof performance !== 'undefined' ? performance.now().toFixed(1) : 0,
               'len=',
               chunk.length,
-              JSON.stringify(chunk.slice(0, 48))
+              JSON.stringify(chunk.slice(0, 48)),
             );
           }
           // 必须同步调用：若用 queueMicrotask，同一缓冲区内「最后一个 delta」会晚于「done」执行，
@@ -395,7 +401,7 @@ export async function chatWithInterviewStream(
     resumePdfExport?: boolean;
     enableWebSearch?: boolean;
     attachments?: ChatAttachment[];
-  }
+  },
 ): Promise<void> {
   return chatWithStreamAt(INTERVIEW_STREAM_URL, message, conversationId, callbacks, options);
 }

@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.db import init_db_tables
+from app.db import init_db_tables, recover_interrupted_contract_reviews
 from app.routers import contract, customer, interview, user
 from app.routers import contract_analysis
 from app.settings import MEDIA_ROOT
@@ -37,6 +37,7 @@ def warmup_agent_executors(*, temperature: float = 0.45) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db_tables()
+    await recover_interrupted_contract_reviews()
     logger.info("database tables ready")
     await init_checkpointer()
 

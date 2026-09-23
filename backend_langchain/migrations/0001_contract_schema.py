@@ -1,4 +1,4 @@
-"""Phase 1 Contract schema migration. Apply explicitly with the project's migration runner."""
+"""Legacy pre-Alembic schema snapshot; retained for history and never executed."""
 
 CREATE_CONTRACT_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS contract_customers (

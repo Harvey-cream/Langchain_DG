@@ -4,6 +4,7 @@ from uuid import UUID
 
 from products.contract.application.ports import (
     ContractRepository,
+    ContractReviewStore,
     ContractVersionRepository,
     CustomerRepository,
 )
@@ -71,19 +72,40 @@ class ContractApplicationService:
 
 
 class ContractVersionApplicationService:
-    def __init__(self, repository: ContractVersionRepository, contracts: ContractRepository, *, commit):
+    def __init__(
+        self,
+        repository: ContractVersionRepository,
+        contracts: ContractRepository,
+        *,
+        session,
+        review_store: ContractReviewStore,
+    ):
         self.repository = repository
         self.contracts = contracts
-        self.commit = commit
+        self.session = session
+        self.review_store = review_store
 
     async def create(self, *, user_id: int, contract_id: UUID, source_key: str, filename: str) -> ContractVersion:
-        if await self.contracts.get(user_id, contract_id) is None:
-            raise LookupError("contract not found")
-        versions = await self.repository.list(user_id, contract_id)
-        number = ContractVersion.next_number([item.number for item in versions])
-        result = await self.repository.add(ContractVersion.create(contract_id=contract_id, number=number, source_key=source_key, filename=filename))
-        await self.commit()
-        return result
+        async with self.session.begin():
+            # 所有 ContractVersion 创建路径统一：锁 Contract → MAX+1 → INSERT。
+            if await self.review_store.lock_owned_contract(user_id, contract_id) is None:
+                raise LookupError("contract not found")
+            number = await self.review_store.get_next_version_number(contract_id)
+            version = ContractVersion.create(
+                contract_id=contract_id,
+                number=number,
+                source_key=source_key,
+                filename=filename,
+            )
+            await self.review_store.create_version(
+                version_id=version.id,
+                contract_id=contract_id,
+                number=number,
+                source_key=version.source_key,
+                filename=version.filename,
+                status=version.status,
+            )
+        return version
 
     async def list(self, *, user_id: int, contract_id: UUID) -> list[ContractVersion]:
         if await self.contracts.get(user_id, contract_id) is None:

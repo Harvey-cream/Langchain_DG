@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { Modal, message } from 'antd';
+import { useLocation } from 'react-router-dom';
+import { message } from 'antd';
 import ReactMarkdown from 'react-markdown';
 import { createRoot, type Root } from 'react-dom/client';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import type { Components } from 'react-markdown';
 import { getUserInfo } from '../../services/api';
+import { expireAuthSession, handleUnauthorizedStatus } from '../../services/authSession';
 import type { ChatApiClient } from '../../services/chatApi';
 import {
   estimateChatStreamPayloadBytes,
@@ -106,7 +107,12 @@ function sanitizeWebSources(sources: WebSource[]): WebSource[] {
     const url = (s.url || '').trim();
     if (!url || seen.has(url)) continue;
     if (/\.(png|jpe?g|gif|webp|svg|ico|css|js|woff2?)(\?|#|$)/i.test(url)) continue;
-    if (/(alicdn\.com|cdn\.|static\.|\.img\.|img\.|\.cloudfront\.|googleapis\.com\/.*\/image)/i.test(url)) continue;
+    if (
+      /(alicdn\.com|cdn\.|static\.|\.img\.|img\.|\.cloudfront\.|googleapis\.com\/.*\/image)/i.test(
+        url,
+      )
+    )
+      continue;
     seen.add(url);
     out.push({ title: (s.title || '').trim() || url, url });
   }
@@ -117,7 +123,13 @@ function extractPlainText(node: React.ReactNode): string {
   if (node == null || node === false) return '';
   if (typeof node === 'string' || typeof node === 'number') return String(node);
   if (Array.isArray(node)) return node.map(extractPlainText).join('');
-  if (React.isValidElement(node) && node.props && typeof node.props === 'object' && node.props !== null && 'children' in node.props) {
+  if (
+    React.isValidElement(node) &&
+    node.props &&
+    typeof node.props === 'object' &&
+    node.props !== null &&
+    'children' in node.props
+  ) {
     return extractPlainText((node.props as { children?: React.ReactNode }).children);
   }
   return '';
@@ -145,7 +157,11 @@ function copyToClipboardFallback(text: string): void {
 }
 
 async function copyToClipboard(text: string): Promise<void> {
-  if (typeof navigator !== 'undefined' && window.isSecureContext && navigator.clipboard?.writeText) {
+  if (
+    typeof navigator !== 'undefined' &&
+    window.isSecureContext &&
+    navigator.clipboard?.writeText
+  ) {
     try {
       await navigator.clipboard.writeText(text);
       return;
@@ -167,7 +183,7 @@ const CHAT_MD_COMPONENTS: Components = {
           onClick={() => {
             void copyToClipboard(raw).then(
               () => message.success('代码已复制'),
-              () => message.error('复制失败')
+              () => message.error('复制失败'),
             );
           }}
         >
@@ -272,14 +288,9 @@ const ChatView: React.FC<ChatViewProps> = ({
   );
 };
 
-const ChatPage: React.FC<ChatPageProps> = ({
-  featureTitle,
-  welcomeMessage,
-  chatApi,
-}) => {
+const ChatPage: React.FC<ChatPageProps> = ({ featureTitle, welcomeMessage, chatApi }) => {
   const [messages, setMessages] = useState<Message[]>(() => [welcomeMessage]);
   const [inputMessage, setInputMessage] = useState('');
-  const navigate = useNavigate();
   const { pathname } = useLocation();
   const activeConversationStorageKey = `chat.activeConversationId:${pathname}`;
   const pendingAttachmentStorageKey = `chat.pendingAttachments:${pathname}`;
@@ -303,13 +314,14 @@ const ChatPage: React.FC<ChatPageProps> = ({
   const [loadingStatusText, setLoadingStatusText] = useState<string | null>(null);
   const [webSources, setWebSources] = useState<WebSource[]>([]);
   const pendingWebSourcesRef = useRef<WebSource[]>([]);
-  const [pdfExportPrompt, setPdfExportPrompt] = useState<{ kind: string; message: string } | null>(null);
+  const [pdfExportPrompt, setPdfExportPrompt] = useState<{ kind: string; message: string } | null>(
+    null,
+  );
   const [pdfExportHostMessageId, setPdfExportHostMessageId] = useState<string | null>(null);
   const [userDisplayTag, setUserDisplayTag] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const conversationIdRef = useRef<number | undefined>(undefined);
-  const logoutModalShownRef = useRef(false);
   const streamAbortRef = useRef<AbortController | null>(null);
   const userAbortRef = useRef(false);
   const streamActiveRef = useRef(false);
@@ -346,7 +358,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
       }
       localStorage.setItem(activeConversationStorageKey, String(id));
     },
-    [activeConversationStorageKey]
+    [activeConversationStorageKey],
   );
 
   const cancelTypewriter = useCallback(() => {
@@ -361,21 +373,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
     streamAbortRef.current?.abort();
   }, []);
 
-  const handleForceLogout = useCallback((msg: string) => {
-    if (logoutModalShownRef.current) return;
-    logoutModalShownRef.current = true;
-
-    Modal.warning({
-      title: '登录状态失效',
-      content: msg,
-      okText: '退出登录',
-      centered: true,
-      onOk: () => {
-        localStorage.removeItem('token');
-        navigate('/login', { replace: true });
-      },
-    });
-  }, [navigate]);
+  const handleForceLogout = useCallback((_message: string) => {
+    expireAuthSession();
+  }, []);
 
   const handleDeleteConversation = useCallback(
     async (id: number) => {
@@ -394,21 +394,27 @@ const ChatPage: React.FC<ChatPageProps> = ({
         setMessages([welcomeMessage]);
       }
     },
-    [deleteConversation, conversationId, welcomeMessage, cancelTypewriter, persistActiveConversationId]
+    [
+      deleteConversation,
+      conversationId,
+      welcomeMessage,
+      cancelTypewriter,
+      persistActiveConversationId,
+    ],
   );
 
   const handleRenameConversation = useCallback(
     async (id: number, title: string) => {
       await renameConversation(id, title);
     },
-    [renameConversation]
+    [renameConversation],
   );
 
   const handlePinConversation = useCallback(
     async (id: number, pinned: boolean) => {
       await pinConversation(id, pinned);
     },
-    [pinConversation]
+    [pinConversation],
   );
 
   useEffect(() => {
@@ -423,7 +429,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
         const items = await loadConversations();
         const raw = localStorage.getItem(activeConversationStorageKey);
         const restoredId = raw ? Number(raw) : NaN;
-        const canRestore = Number.isInteger(restoredId) && items.some(c => c.id === restoredId);
+        const canRestore = Number.isInteger(restoredId) && items.some((c) => c.id === restoredId);
         if (canRestore) {
           await handleSelectConversation(restoredId);
         } else {
@@ -442,7 +448,12 @@ const ChatPage: React.FC<ChatPageProps> = ({
         /* ignore */
       }
     })();
-  }, [handleForceLogout, loadConversations, activeConversationStorageKey, persistActiveConversationId]);
+  }, [
+    handleForceLogout,
+    loadConversations,
+    activeConversationStorageKey,
+    persistActiveConversationId,
+  ]);
 
   const updateStickToBottom = useCallback(() => {
     const el = messagesContainerRef.current;
@@ -477,17 +488,17 @@ const ChatPage: React.FC<ChatPageProps> = ({
           </ReactMarkdown>
         ) : (
           <span className="chat-assistant-pending">正在生成回复…</span>
-        )
+        ),
       );
       scrollToBottomIfStuck();
       return true;
     },
-    [disposeStreamingDomRenderer, scrollToBottomIfStuck]
+    [disposeStreamingDomRenderer, scrollToBottomIfStuck],
   );
 
   const getStreamingFormatted = useCallback(
     () => formatAssistantDisplayText(streamAccumRef.current.text, { streaming: true }),
-    []
+    [],
   );
 
   useEffect(() => {
@@ -559,7 +570,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
           });
           const reply = String(item.ai_response ?? '').trim();
           const sources = Array.isArray(item.web_sources)
-            ? item.web_sources.filter(s => s?.url)
+            ? item.web_sources.filter((s) => s?.url)
             : undefined;
           // generating 且尚无正文：开流占位，刷新时跳过助手气泡
           if (item.status === 'generating' && !reply) {
@@ -574,7 +585,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
               webSources: sources?.length ? sources : undefined,
             });
           }
-        }
+        },
       );
       setConversationId(selectedConversationId);
       persistActiveConversationId(selectedConversationId);
@@ -602,30 +613,30 @@ const ChatPage: React.FC<ChatPageProps> = ({
     async (
       targetConversationId: number,
       localStreamingMsgId: string | null,
-      sessionId: number | null
+      sessionId: number | null,
     ) => {
       if (!localStreamingMsgId) return;
       try {
         const response = await chatApi.getConversationMessages(
           targetConversationId,
-          sessionId ?? undefined
+          sessionId ?? undefined,
         );
         if (!response?.success) return;
         const history = response?.data?.messages || [];
         const matched =
           sessionId != null
-            ? history.find((item: { id: number }) => item.id === sessionId) ?? history[0]
+            ? (history.find((item: { id: number }) => item.id === sessionId) ?? history[0])
             : history[history.length - 1];
         const finalReply = String(matched?.ai_response ?? '').trim();
         if (!finalReply) return;
-        setMessages(prev =>
-          prev.map(m => (m.id === localStreamingMsgId ? { ...m, content: finalReply } : m))
+        setMessages((prev) =>
+          prev.map((m) => (m.id === localStreamingMsgId ? { ...m, content: finalReply } : m)),
         );
       } catch {
         // ignore: 对账失败不影响主链路
       }
     },
-    [chatApi]
+    [chatApi],
   );
 
   const runStreamTeardown = useCallback(
@@ -633,7 +644,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
       cancelTypewriter();
       pendingStreamEndRef.current = false;
       if (msgId && fullText) {
-        setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: fullText } : m)));
+        setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, content: fullText } : m)));
       }
       streamAccumRef.current = { msgId: null, text: '' };
       typewriterRevealLenRef.current = 0;
@@ -650,7 +661,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
         void reconcileStreamingMessageFromServer(cid, msgId, sid);
       }
     },
-    [cancelTypewriter, reconcileStreamingMessageFromServer]
+    [cancelTypewriter, reconcileStreamingMessageFromServer],
   );
 
   const scheduleTypewriterTick = useCallback(() => {
@@ -665,8 +676,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
       const target = full.length;
       const backlog = target - revealed;
       if (backlog > 0) {
-        const step =
-          backlog > 200 ? TYPEWRITER_MAX_STEP : backlog > 80 ? 4 : backlog > 25 ? 2 : 1;
+        const step = backlog > 200 ? TYPEWRITER_MAX_STEP : backlog > 80 ? 4 : backlog > 25 ? 2 : 1;
         revealed = Math.min(revealed + step, target);
         typewriterRevealLenRef.current = revealed;
         const slice = full.slice(0, revealed);
@@ -710,162 +720,169 @@ const ChatPage: React.FC<ChatPageProps> = ({
     startConversationId: number | undefined,
     streamConversationIdRef: { current: number | undefined },
     streamingMsgIdRef: { current: string | null },
-    sawInterruptRef: { current: boolean }
+    sawInterruptRef: { current: boolean },
   ) => {
     const isCurrentStreamConversation = () =>
       conversationIdRef.current === startConversationId ||
       (streamConversationIdRef.current != null &&
         conversationIdRef.current === streamConversationIdRef.current);
 
-    return ({
-    onMeta: ({ conversation_id, session_id }: { conversation_id: number; session_id: number }) => {
-      streamConversationIdRef.current = conversation_id;
-      streamSessionIdRef.current = session_id;
-      if (conversationIdRef.current === startConversationId) {
-        setConversationId(conversation_id);
-        persistActiveConversationId(conversation_id);
-        setLoadingConversationId(conversation_id);
-      }
-    },
-    onDelta: (text: string) => {
-      if (!isCurrentStreamConversation()) return;
-      setLoadingStatusText(null);
-      if (!streamingMsgIdRef.current) {
-        const id = `ai-${Date.now()}`;
-        streamingMsgIdRef.current = id;
-        streamAccumRef.current = { msgId: id, text };
-        typewriterRevealLenRef.current = 0;
-        setStreamingAssistantId(id);
-        setIsLoading(false);
-        setMessages(prev => [
-          ...prev,
-          {
-            id,
-            content: '',
-            isUser: false,
-            timestamp: new Date().toLocaleTimeString(),
-            webSources: pendingWebSourcesRef.current.length
-              ? [...pendingWebSourcesRef.current]
-              : undefined,
-          },
-        ]);
-        scheduleStreamFlush();
-        return;
-      }
-      streamAccumRef.current.text = mergeStreamingDelta(streamAccumRef.current.text, text);
-      scheduleStreamFlush();
-    },
-    onError: (errText: string) => {
-      if (!isCurrentStreamConversation()) return;
-      const line = `\n\n[错误] ${errText}`;
-      if (!streamingMsgIdRef.current) {
-        const id = `ai-${Date.now()}`;
-        streamingMsgIdRef.current = id;
-        streamAccumRef.current = { msgId: id, text: line.trim() };
-        setStreamingAssistantId(id);
-        setIsLoading(false);
-        setMessages(prev => [
-          ...prev,
-          {
-            id,
-            content: line.trim(),
-            isUser: false,
-            timestamp: new Date().toLocaleTimeString(),
-            webSources: pendingWebSourcesRef.current.length
-              ? [...pendingWebSourcesRef.current]
-              : undefined,
-          },
-        ]);
-      } else {
-        streamAccumRef.current.text = mergeStreamingDelta(streamAccumRef.current.text, line);
-        scheduleStreamFlush();
-      }
-    },
-    onStreamDone: () => {
-      if (!isCurrentStreamConversation()) return;
-      if (streamFlushRafRef.current != null) {
-        cancelAnimationFrame(streamFlushRafRef.current);
-        streamFlushRafRef.current = null;
-      }
-      pendingStreamEndRef.current = true;
-      scheduleTypewriterTick();
-    },
-    onDone: () => {
-      if (isCurrentStreamConversation()) {
-        void loadConversations();
-      }
-    },
-    onStatus: (text: string) => {
-      if (!isCurrentStreamConversation()) return;
-      setLoadingStatusText(text);
-    },
-    onWebSources: (sources: WebSource[]) => {
-      if (!isCurrentStreamConversation()) return;
-      const cleaned = sanitizeWebSources(sources);
-      pendingWebSourcesRef.current = cleaned;
-      setWebSources(cleaned);
-      setLoadingStatusText(null);
-      const mid = streamingMsgIdRef.current;
-      if (mid && cleaned.length) {
-        setMessages(prev =>
-          prev.map(m => (m.id === mid ? { ...m, webSources: cleaned } : m))
-        );
-      }
-    },
-    onInterrupt: (p: { kind: string; message: string }) => {
-      sawInterruptRef.current = true;
-      const existingId = streamingMsgIdRef.current;
-      if (existingId) {
-        setPdfExportHostMessageId(existingId);
-      } else {
-        const newId = `ai-${Date.now()}`;
-        streamingMsgIdRef.current = newId;
-        streamAccumRef.current = { msgId: newId, text: '' };
-        typewriterRevealLenRef.current = 0;
-        setStreamingAssistantId(newId);
-        setIsLoading(false);
-        setMessages(prev => [
-          ...prev,
-          {
-            id: newId,
-            content: '',
-            isUser: false,
-            timestamp: new Date().toLocaleTimeString(),
-            webSources: pendingWebSourcesRef.current.length
-              ? [...pendingWebSourcesRef.current]
-              : undefined,
-          },
-        ]);
-        setPdfExportHostMessageId(newId);
-      }
-      setPdfExportPrompt({ kind: p.kind, message: p.message });
-    },
-    onPdfReady: ({ url, filename }: { url: string; filename: string }) => {
-      void (async () => {
-        try {
-          const token = localStorage.getItem('token');
-          const res = await fetch(url, {
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-          });
-          if (!res.ok) {
-            throw new Error(String(res.status));
-          }
-          const blob = await res.blob();
-          const a = document.createElement('a');
-          const href = URL.createObjectURL(blob);
-          a.href = href;
-          a.download = filename || 'export.pdf';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(href);
-          message.success('PDF 已开始下载');
-        } catch {
-          message.error('PDF 下载失败，请稍后重试或检查网络');
+    return {
+      onMeta: ({
+        conversation_id,
+        session_id,
+      }: {
+        conversation_id: number;
+        session_id: number;
+      }) => {
+        streamConversationIdRef.current = conversation_id;
+        streamSessionIdRef.current = session_id;
+        if (conversationIdRef.current === startConversationId) {
+          setConversationId(conversation_id);
+          persistActiveConversationId(conversation_id);
+          setLoadingConversationId(conversation_id);
         }
-      })();
-    },
-  });
+      },
+      onDelta: (text: string) => {
+        if (!isCurrentStreamConversation()) return;
+        setLoadingStatusText(null);
+        if (!streamingMsgIdRef.current) {
+          const id = `ai-${Date.now()}`;
+          streamingMsgIdRef.current = id;
+          streamAccumRef.current = { msgId: id, text };
+          typewriterRevealLenRef.current = 0;
+          setStreamingAssistantId(id);
+          setIsLoading(false);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id,
+              content: '',
+              isUser: false,
+              timestamp: new Date().toLocaleTimeString(),
+              webSources: pendingWebSourcesRef.current.length
+                ? [...pendingWebSourcesRef.current]
+                : undefined,
+            },
+          ]);
+          scheduleStreamFlush();
+          return;
+        }
+        streamAccumRef.current.text = mergeStreamingDelta(streamAccumRef.current.text, text);
+        scheduleStreamFlush();
+      },
+      onError: (errText: string) => {
+        if (!isCurrentStreamConversation()) return;
+        const line = `\n\n[错误] ${errText}`;
+        if (!streamingMsgIdRef.current) {
+          const id = `ai-${Date.now()}`;
+          streamingMsgIdRef.current = id;
+          streamAccumRef.current = { msgId: id, text: line.trim() };
+          setStreamingAssistantId(id);
+          setIsLoading(false);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id,
+              content: line.trim(),
+              isUser: false,
+              timestamp: new Date().toLocaleTimeString(),
+              webSources: pendingWebSourcesRef.current.length
+                ? [...pendingWebSourcesRef.current]
+                : undefined,
+            },
+          ]);
+        } else {
+          streamAccumRef.current.text = mergeStreamingDelta(streamAccumRef.current.text, line);
+          scheduleStreamFlush();
+        }
+      },
+      onStreamDone: () => {
+        if (!isCurrentStreamConversation()) return;
+        if (streamFlushRafRef.current != null) {
+          cancelAnimationFrame(streamFlushRafRef.current);
+          streamFlushRafRef.current = null;
+        }
+        pendingStreamEndRef.current = true;
+        scheduleTypewriterTick();
+      },
+      onDone: () => {
+        if (isCurrentStreamConversation()) {
+          void loadConversations();
+        }
+      },
+      onStatus: (text: string) => {
+        if (!isCurrentStreamConversation()) return;
+        setLoadingStatusText(text);
+      },
+      onWebSources: (sources: WebSource[]) => {
+        if (!isCurrentStreamConversation()) return;
+        const cleaned = sanitizeWebSources(sources);
+        pendingWebSourcesRef.current = cleaned;
+        setWebSources(cleaned);
+        setLoadingStatusText(null);
+        const mid = streamingMsgIdRef.current;
+        if (mid && cleaned.length) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === mid ? { ...m, webSources: cleaned } : m)),
+          );
+        }
+      },
+      onInterrupt: (p: { kind: string; message: string }) => {
+        sawInterruptRef.current = true;
+        const existingId = streamingMsgIdRef.current;
+        if (existingId) {
+          setPdfExportHostMessageId(existingId);
+        } else {
+          const newId = `ai-${Date.now()}`;
+          streamingMsgIdRef.current = newId;
+          streamAccumRef.current = { msgId: newId, text: '' };
+          typewriterRevealLenRef.current = 0;
+          setStreamingAssistantId(newId);
+          setIsLoading(false);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: newId,
+              content: '',
+              isUser: false,
+              timestamp: new Date().toLocaleTimeString(),
+              webSources: pendingWebSourcesRef.current.length
+                ? [...pendingWebSourcesRef.current]
+                : undefined,
+            },
+          ]);
+          setPdfExportHostMessageId(newId);
+        }
+        setPdfExportPrompt({ kind: p.kind, message: p.message });
+      },
+      onPdfReady: ({ url, filename }: { url: string; filename: string }) => {
+        void (async () => {
+          try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(url, {
+              headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
+            if (handleUnauthorizedStatus(res.status)) return;
+            if (!res.ok) {
+              throw new Error(String(res.status));
+            }
+            const blob = await res.blob();
+            const a = document.createElement('a');
+            const href = URL.createObjectURL(blob);
+            a.href = href;
+            a.download = filename || 'export.pdf';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(href);
+            message.success('PDF 已开始下载');
+          } catch {
+            message.error('PDF 下载失败，请稍后重试或检查网络');
+          }
+        })();
+      },
+    };
   };
 
   const runStreamCommonFinally = () => {
@@ -884,7 +901,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
       cancelTypewriter();
       const { msgId, text } = streamAccumRef.current;
       if (msgId && text) {
-        setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, content: text } : m)));
+        setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, content: text } : m)));
       }
       streamAccumRef.current = { msgId: null, text: '' };
       typewriterRevealLenRef.current = 0;
@@ -903,7 +920,8 @@ const ChatPage: React.FC<ChatPageProps> = ({
     }
 
     const attachmentsForSend = pendingAttachments;
-    const messageText = inputMessage.trim() || (attachmentsForSend.length ? '请理解这些附件。' : '');
+    const messageText =
+      inputMessage.trim() || (attachmentsForSend.length ? '请理解这些附件。' : '');
     if (!messageText) return;
 
     if (
@@ -931,7 +949,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
       attachments: attachmentsForSend,
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages((prev) => [...prev, userMessage]);
     setInputMessage('');
     clearAttachments();
     setIsLoading(true);
@@ -947,7 +965,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
       startConversationId,
       streamConversationIdRef,
       streamingMsgIdRef,
-      sawInterruptRef
+      sawInterruptRef,
     );
 
     try {
@@ -963,7 +981,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
       }
 
       if (!streamingMsgIdRef.current && !sawInterruptRef.current) {
-        setMessages(prev => [
+        setMessages((prev) => [
           ...prev,
           {
             id: `ai-${Date.now()}`,
@@ -988,7 +1006,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
         const tail = userStopped ? '（已中止）' : '（已中断：长时间无数据）';
         if (conversationIdRef.current === startConversationId) {
           if (!streamingMsgIdRef.current && !sawInterruptRef.current) {
-            setMessages(prev => [
+            setMessages((prev) => [
               ...prev,
               {
                 id: `ai-${Date.now()}`,
@@ -1005,7 +1023,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
             const combined = acc ? `${acc}\n\n${tail}` : tail;
             streamAccumRef.current = { msgId: null, text: '' };
             typewriterRevealLenRef.current = 0;
-            setMessages(prev => prev.map(m => (m.id === mid ? { ...m, content: combined } : m)));
+            setMessages((prev) =>
+              prev.map((m) => (m.id === mid ? { ...m, content: combined } : m)),
+            );
             setStreamingAssistantId(null);
             streamActiveRef.current = false;
             setStreamActive(false);
@@ -1029,7 +1049,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
       }
 
       if (!streamingMsgIdRef.current && !sawInterruptRef.current) {
-        setMessages(prev => [
+        setMessages((prev) => [
           ...prev,
           {
             id: `ai-${Date.now()}`,
@@ -1046,7 +1066,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
         const combined = acc || errorMessage;
         streamAccumRef.current = { msgId: null, text: '' };
         typewriterRevealLenRef.current = 0;
-        setMessages(prev => prev.map(m => (m.id === mid ? { ...m, content: combined } : m)));
+        setMessages((prev) => prev.map((m) => (m.id === mid ? { ...m, content: combined } : m)));
         setStreamingAssistantId(null);
         streamActiveRef.current = false;
         setStreamActive(false);
@@ -1081,7 +1101,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
       startConversationId,
       streamConversationIdRef,
       streamingMsgIdRef,
-      sawInterruptRef
+      sawInterruptRef,
     );
 
     try {
@@ -1097,7 +1117,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
       }
 
       if (!streamingMsgIdRef.current && !sawInterruptRef.current) {
-        setMessages(prev => [
+        setMessages((prev) => [
           ...prev,
           {
             id: `ai-${Date.now()}`,
@@ -1119,7 +1139,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
         const tail = userStopped ? '（已中止）' : '（已中断：长时间无数据）';
         if (conversationIdRef.current === startConversationId) {
           if (!streamingMsgIdRef.current && !sawInterruptRef.current) {
-            setMessages(prev => [
+            setMessages((prev) => [
               ...prev,
               {
                 id: `ai-${Date.now()}`,
@@ -1136,7 +1156,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
             const combined = acc ? `${acc}\n\n${tail}` : tail;
             streamAccumRef.current = { msgId: null, text: '' };
             typewriterRevealLenRef.current = 0;
-            setMessages(prev => prev.map(m => (m.id === mid ? { ...m, content: combined } : m)));
+            setMessages((prev) =>
+              prev.map((m) => (m.id === mid ? { ...m, content: combined } : m)),
+            );
             setStreamingAssistantId(null);
             streamActiveRef.current = false;
             setStreamActive(false);
@@ -1160,7 +1182,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
       }
 
       if (!streamingMsgIdRef.current && !sawInterruptRef.current) {
-        setMessages(prev => [
+        setMessages((prev) => [
           ...prev,
           {
             id: `ai-${Date.now()}`,
@@ -1177,7 +1199,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
         const combined = acc || errorMessage;
         streamAccumRef.current = { msgId: null, text: '' };
         typewriterRevealLenRef.current = 0;
-        setMessages(prev => prev.map(m => (m.id === mid ? { ...m, content: combined } : m)));
+        setMessages((prev) => prev.map((m) => (m.id === mid ? { ...m, content: combined } : m)));
         setStreamingAssistantId(null);
         streamActiveRef.current = false;
         setStreamActive(false);
@@ -1217,7 +1239,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
         onAttachFiles={(files) => void handleAttachFiles(files)}
         onRemoveAttachment={handleRemoveAttachment}
         enableWebSearch={enableWebSearch}
-        onToggleWebSearch={() => setEnableWebSearch(v => !v)}
+        onToggleWebSearch={() => setEnableWebSearch((v) => !v)}
         streamActive={streamActive}
         onStopStream={handleStopStream}
         onSelectConversation={handleSelectConversation}

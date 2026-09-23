@@ -1,12 +1,21 @@
 from datetime import datetime
 from uuid import UUID, uuid4
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, Uuid, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, String, Text, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 from infrastructure.db.base import Base
 
 
 class AnalysisRunModel(Base):
     __tablename__ = 'contract_analysis_runs'
+    __table_args__ = (
+        Index(
+            "uq_contract_active_analysis",
+            "version_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'parsing', 'analyzing')"),
+            sqlite_where=text("status IN ('pending', 'parsing', 'analyzing')"),
+        ),
+    )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     version_id: Mapped[UUID] = mapped_column(ForeignKey('contract_versions.id'), index=True)
     status: Mapped[str] = mapped_column(String(32), default='pending')

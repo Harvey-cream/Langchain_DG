@@ -1,4 +1,5 @@
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
+import { handleUnauthorizedStatus } from './authSession';
 
 // 创建Axios实例
 const apiClient: AxiosInstance = axios.create({
@@ -34,12 +35,15 @@ apiClient.interceptors.request.use(
 );
 
 // 响应拦截器
-const setupResponseInterceptor = (client: AxiosInstance) => {
+const setupResponseInterceptor = (client: AxiosInstance, authenticated: boolean) => {
   client.interceptors.response.use(
     (response: AxiosResponse) => {
       return response;
     },
     (error) => {
+      if (authenticated && handleUnauthorizedStatus(error.response?.status)) {
+        return Promise.reject(error);
+      }
       // 统一错误处理
       if (error.response) {
         // 服务器返回错误状态码
@@ -57,8 +61,8 @@ const setupResponseInterceptor = (client: AxiosInstance) => {
 };
 
 // 设置响应拦截器
-setupResponseInterceptor(apiClient);
-setupResponseInterceptor(releaseClient);
+setupResponseInterceptor(apiClient, true);
+setupResponseInterceptor(releaseClient, false);
 
 // 通用请求方法
 export const sendRequest = async <T = AxiosResponse['data']>(

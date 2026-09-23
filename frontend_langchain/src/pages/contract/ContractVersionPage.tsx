@@ -1,19 +1,8 @@
-import { useEffect, useState } from 'react';
-import { Alert, Button, Empty, Select, Spin, Tag, Upload, message } from 'antd';
+import { Alert, Button, Empty, Select, Spin, Tag, Upload } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
-import { listContractVersions } from '../../features/contract/api';
-import {
-  getContract,
-  listAnalysisRuns,
-  selectAnalysisRun,
-  uploadContract,
-  retryAnalysis,
-  errorText,
-} from '../../features/contract/api/demo';
-import type { AnalysisRun } from '../../features/contract/api/demo';
-import { useContractAnalysis } from '../../features/contract/hooks/useContractAnalysis';
+import { AnalysisHistory } from '../../features/contract/components/AnalysisHistory';
 import { AnalysisResult } from '../../features/contract/components/AnalysisResult';
-import type { ContractVersion } from '../../features/contract/types';
+import { useContractWorkspace } from '../../features/contract/hooks/useContractWorkspace';
 import './contract.css';
 
 const statusLabels: Record<string, string> = {
@@ -27,105 +16,24 @@ const statusLabels: Record<string, string> = {
 export default function ContractVersionPage() {
   const { contractId = '' } = useParams();
   const navigate = useNavigate();
-  const [title, setTitle] = useState('合同详情');
-  const [versions, setVersions] = useState<ContractVersion[]>([]);
-  const [selected, setSelected] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [historyBusy, setHistoryBusy] = useState(false);
-  const [runs, setRuns] = useState<AnalysisRun[]>([]);
-  const [pageError, setPageError] = useState('');
-  const [refreshKey, setRefreshKey] = useState(0);
-  const { analysis, loading, error } = useContractAnalysis(contractId, selected, refreshKey);
-  const running = Boolean(
-    analysis && ['pending', 'parsing', 'analyzing'].includes(analysis.status),
-  );
-
-  useEffect(() => {
-    let disposed = false;
-    if (!selected) {
-      setRuns([]);
-      return;
-    }
-    listAnalysisRuns(contractId, selected)
-      .then((response) => {
-        if (!disposed) setRuns(response.data?.runs ?? []);
-      })
-      .catch((cause) => {
-        if (!disposed) setPageError(errorText(cause));
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [contractId, selected, refreshKey, analysis?.latest_run_id, analysis?.status]);
-
-  useEffect(() => {
-    let disposed = false;
-    setSelected('');
-    setPageError('');
-    Promise.all([getContract(contractId), listContractVersions(contractId)])
-      .then(([contract, response]) => {
-        if (disposed) return;
-        const rows = response.data?.versions ?? [];
-        setTitle(contract.data?.title ?? '合同详情');
-        setVersions(rows);
-        setSelected(rows[rows.length - 1]?.id ?? '');
-      })
-      .catch((cause) => {
-        if (!disposed) setPageError(errorText(cause));
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [contractId]);
-
-  async function upload(file: File) {
-    if (file.size > 20 * 1024 * 1024 || !/\.(pdf|docx)$/i.test(file.name)) {
-      message.error('请选择 20 MB 以内的 PDF / DOCX');
-      return Upload.LIST_IGNORE;
-    }
-    setBusy(true);
-    try {
-      const response = await uploadContract(contractId, file);
-      if (!response.success || !response.data) {
-        throw new Error(response.msg || '合同上传失败');
-      }
-      const list = await listContractVersions(contractId);
-      setVersions(list.data?.versions ?? []);
-      setSelected(response.data.version_id);
-      message.success('合同已上传，开始分析');
-    } catch (cause) {
-      message.error(errorText(cause));
-    } finally {
-      setBusy(false);
-    }
-    return false;
-  }
-
-  async function retry() {
-    setBusy(true);
-    try {
-      await retryAnalysis(contractId, selected);
-      setRefreshKey((key) => key + 1);
-    } catch (cause) {
-      message.error(errorText(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function selectRun(runId: string) {
-    if (!selected || runId === analysis?.selected_run_id) return;
-    setHistoryBusy(true);
-    try {
-      await selectAnalysisRun(contractId, selected, runId);
-      setRefreshKey((key) => key + 1);
-      message.success('已切换到所选历史分析');
-    } catch (cause) {
-      message.error(errorText(cause));
-    } finally {
-      setHistoryBusy(false);
-    }
-  }
+  const {
+    title,
+    versions,
+    currentVersionId: selected,
+    setCurrentVersionId: setSelected,
+    analysis,
+    selectedRunId,
+    runs,
+    loading,
+    running,
+    busy,
+    historyBusy,
+    error,
+    upload,
+    retry,
+    selectRun,
+    refresh,
+  } = useContractWorkspace(contractId);
 
   return (
     <main className="contract-shell">
@@ -159,12 +67,12 @@ export default function ContractVersionPage() {
           </Upload>
         </div>
       </section>
-      {(pageError || error) && (
+      {error && (
         <Alert
           type="error"
-          message={pageError || error}
+          message={error}
           showIcon
-          action={<Button onClick={() => setRefreshKey((key) => key + 1)}>刷新结果</Button>}
+          action={<Button onClick={refresh}>刷新结果</Button>}
         />
       )}
       <div className="contract-columns">
@@ -199,30 +107,12 @@ export default function ContractVersionPage() {
               {statusLabels[analysis?.status ?? ''] ?? '等待上传'}
             </Tag>
           </div>
-          {runs.length > 0 && (
-            <div className="analysis-history">
-              <span>展示记录</span>
-              <Select
-                aria-label="分析历史"
-                value={analysis?.selected_run_id ?? undefined}
-                loading={historyBusy}
-                disabled={historyBusy}
-                placeholder="选择一次成功分析"
-                onChange={(runId) => void selectRun(runId)}
-                options={runs.map((run) => ({
-                  value: run.id,
-                  disabled: run.status !== 'completed',
-                  label: `第 ${run.attempt} 次 · ${
-                    run.status === 'completed'
-                      ? '分析成功'
-                      : run.status === 'failed'
-                        ? '分析失败'
-                        : '进行中'
-                  }${run.selected ? ' · 当前展示' : ''}`,
-                }))}
-              />
-            </div>
-          )}
+          <AnalysisHistory
+            runs={runs}
+            selectedRunId={selectedRunId}
+            busy={historyBusy}
+            onSelect={(runId) => void selectRun(runId)}
+          />
           {analysis?.is_showing_previous && (
             <Alert
               type="info"

@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from products.contract.domain.contract import Contract
 from products.contract.domain.customer import Customer
+from products.contract.domain.review import (
+    ReviewContext,
+    ReviewRunRecord,
+    ReviewSnapshot,
+    VersionContent,
+)
 from products.contract.domain.version import ContractVersion
+from products.contract.schemas.analysis import ContractAnalysis
 
 
 class CustomerRepository(Protocol):
@@ -27,3 +34,63 @@ class ContractVersionRepository(Protocol):
     async def add(self, version: ContractVersion) -> ContractVersion: ...
     async def get(self, user_id: int, version_id: UUID) -> ContractVersion | None: ...
     async def list(self, user_id: int, contract_id: UUID) -> Sequence[ContractVersion]: ...
+
+
+class ContractReviewStore(Protocol):
+    """Contract Review 聚合的数据访问边界；事务由调用方控制。"""
+
+    async def get_owned_contract(self, user_id: int, contract_id: UUID) -> Any | None: ...
+    async def lock_owned_contract(self, user_id: int, contract_id: UUID) -> Any | None: ...
+    async def get_owned_version(
+        self, user_id: int, contract_id: UUID, version_id: UUID
+    ) -> Any | None: ...
+    async def lock_owned_version(
+        self, user_id: int, contract_id: UUID, version_id: UUID
+    ) -> Any | None: ...
+    async def get_next_version_number(self, contract_id: UUID) -> int: ...
+    async def create_version(
+        self,
+        *,
+        version_id: UUID,
+        contract_id: UUID,
+        number: int,
+        source_key: str,
+        filename: str,
+        status: str,
+    ) -> Any: ...
+    async def get_active_run(self, version_id: UUID) -> Any | None: ...
+    async def get_max_attempt(self, version_id: UUID) -> int: ...
+    async def create_run(
+        self,
+        *,
+        version_id: UUID,
+        attempt: int,
+        prompt_version: str = "v2",
+    ) -> Any: ...
+    async def set_version_status(self, version: Any, status: str) -> None: ...
+
+    async def claim_run(self, run_id: UUID) -> ReviewContext | None: ...
+    async def get_content(self, version_id: UUID) -> VersionContent | None: ...
+    async def save_content(self, content: VersionContent) -> None: ...
+    async def mark_parsing(self, context: ReviewContext) -> None: ...
+    async def mark_analyzing(self, context: ReviewContext) -> None: ...
+    async def complete_run(
+        self, context: ReviewContext, result: ContractAnalysis
+    ) -> None: ...
+    async def fail_run(self, run_id: UUID, message: str) -> None: ...
+
+    async def load_snapshot(
+        self, user_id: int, contract_id: UUID, version_id: UUID
+    ) -> ReviewSnapshot | None: ...
+    async def list_history(
+        self, user_id: int, contract_id: UUID, version_id: UUID
+    ) -> list[ReviewRunRecord] | None: ...
+    async def select_run(
+        self, user_id: int, contract_id: UUID, version_id: UUID, run_id: UUID
+    ) -> bool: ...
+
+
+class JobDispatcher(Protocol):
+    """Contract Review 后台分析任务的最小派发边界。"""
+
+    async def dispatch_analysis(self, run_id: UUID) -> None: ...

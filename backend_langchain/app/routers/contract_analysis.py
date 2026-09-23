@@ -1,41 +1,62 @@
 from uuid import UUID
-from fastapi import APIRouter, Depends, BackgroundTasks, UploadFile, File, HTTPException
-from app.db import get_db
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from app.deps import require_user
 from app.dependencies.contract import get_contract_review_service
 from app.response import ok
 from infrastructure.document.contract_parser import MAX_BYTES
-from infrastructure.document.contract_jobs import owned_version, upload_version, new_run, execute_analysis
-from products.contract.application.review_service import ContractReviewApplicationService
+from products.contract.application.review_service import (
+    AnalysisRunNotSelectableError,
+    ContractNotFoundError,
+    ContractReviewService,
+    ContractVersionNotFoundError,
+    ContractVersionSourceError,
+)
 from products.contract.domain.review import ReviewRunRecord, ReviewSnapshot
 
 router = APIRouter(prefix='/api/contracts', tags=['contract-analysis'])
 
 
 @router.post('/{contract_id}/versions/upload')
-async def upload(contract_id: UUID, background: BackgroundTasks, file: UploadFile = File(...),
-                 user=Depends(require_user), db=Depends(get_db)):
+async def upload(
+    contract_id: UUID,
+    file: UploadFile = File(...),
+    user=Depends(require_user),
+    service: ContractReviewService = Depends(get_contract_review_service),
+):
     try:
         data = await file.read(MAX_BYTES + 1)
-        version, run = await upload_version(db, user.user_id, contract_id, (file.filename or 'contract').replace('\\', '/').split('/')[-1], data)
+        version, run = await service.upload_contract_version(
+            user_id=user.user_id,
+            contract_id=contract_id,
+            filename=file.filename or 'contract',
+            data=data,
+        )
+    except ContractNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     finally:
         await file.close()
-    background.add_task(execute_analysis, run.id)
     return ok('上传成功，开始分析', {'version_id': str(version.id), 'run_id': str(run.id)})
 
 
 @router.post('/{contract_id}/versions/{version_id}/analyze')
-async def analyze(contract_id: UUID, version_id: UUID, background: BackgroundTasks,
-                  user=Depends(require_user), db=Depends(get_db)):
-    version = await owned_version(db, user.user_id, contract_id, version_id)
-    expected_key = f'contracts/{user.user_id}/{contract_id}/{version_id}/original.'
-    if version.source_key not in (expected_key + 'pdf', expected_key + 'docx'):
-        raise HTTPException(422, '请通过文件上传创建版本后再分析')
-    run, created = await new_run(db, version)
-    if created:
-        background.add_task(execute_analysis, run.id)
+async def analyze(
+    contract_id: UUID,
+    version_id: UUID,
+    user=Depends(require_user),
+    service: ContractReviewService = Depends(get_contract_review_service),
+):
+    try:
+        run, _created = await service.retry_analysis(
+            user_id=user.user_id,
+            contract_id=contract_id,
+            version_id=version_id,
+        )
+    except ContractVersionNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ContractVersionSourceError as exc:
+        raise HTTPException(422, str(exc)) from exc
     return ok('分析任务已提交', {'run_id': str(run.id)})
 
 
@@ -44,15 +65,15 @@ async def analysis(
     contract_id: UUID,
     version_id: UUID,
     user=Depends(require_user),
-    service: ContractReviewApplicationService = Depends(get_contract_review_service),
+    service: ContractReviewService = Depends(get_contract_review_service),
 ):
     try:
-        snapshot = await service.get(
+        snapshot = await service.get_analysis(
             user_id=user.user_id,
             contract_id=contract_id,
             version_id=version_id,
         )
-    except LookupError as exc:
+    except ContractVersionNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
     return ok('获取分析成功', _snapshot_payload(snapshot))
 
@@ -62,20 +83,20 @@ async def analysis_runs(
     contract_id: UUID,
     version_id: UUID,
     user=Depends(require_user),
-    service: ContractReviewApplicationService = Depends(get_contract_review_service),
+    service: ContractReviewService = Depends(get_contract_review_service),
 ):
     try:
-        snapshot = await service.get(
+        snapshot = await service.get_analysis(
             user_id=user.user_id,
             contract_id=contract_id,
             version_id=version_id,
         )
-        runs = await service.history(
+        runs = await service.get_analysis_history(
             user_id=user.user_id,
             contract_id=contract_id,
             version_id=version_id,
         )
-    except LookupError as exc:
+    except ContractVersionNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
     selected_id = snapshot.selected_run.id if snapshot.selected_run else None
     return ok(
@@ -96,16 +117,16 @@ async def select_analysis_run(
     version_id: UUID,
     run_id: UUID,
     user=Depends(require_user),
-    service: ContractReviewApplicationService = Depends(get_contract_review_service),
+    service: ContractReviewService = Depends(get_contract_review_service),
 ):
     try:
-        snapshot = await service.select(
+        snapshot = await service.select_analysis_run(
             user_id=user.user_id,
             contract_id=contract_id,
             version_id=version_id,
             run_id=run_id,
         )
-    except LookupError as exc:
+    except AnalysisRunNotSelectableError as exc:
         raise HTTPException(404, str(exc)) from exc
     return ok('已切换到所选分析记录', _snapshot_payload(snapshot))
 

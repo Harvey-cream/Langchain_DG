@@ -16,8 +16,11 @@ async def get_current_user(
     user_id = verify_token(authorization)
     if not user_id:
         return None
-    result = await db.execute(select(User).where(User.user_id == user_id))
-    return result.scalar_one_or_none()
+    # Close the authentication read transaction before endpoint use cases open
+    # their own explicit transaction on the request-scoped session.
+    async with db.begin():
+        result = await db.execute(select(User).where(User.user_id == user_id))
+        return result.scalar_one_or_none()
 
 
 async def require_user(user: User | None = Depends(get_current_user)) -> User:

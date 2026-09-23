@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 engine = create_async_engine(DATABASE_URL, pool_pre_ping=True, pool_size=10, max_overflow=20)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
-# create_all 不改已有表；启动时补齐会话落库字段
+# Contract 表由 Alembic 管理；旧模块仍暂时沿用 create_all 和会话字段补丁。
 _SESSION_COLUMN_PATCHES: list[tuple[str, str, str]] = [
     ("user_sessions", "status", "VARCHAR(32) NOT NULL DEFAULT 'completed'"),
     ("user_sessions", "token_estimate", "INT NULL"),
@@ -21,14 +21,18 @@ _SESSION_COLUMN_PATCHES: list[tuple[str, str, str]] = [
     ("interview_sessions", "token_estimate", "INT NULL"),
 ]
 
-_CONTRACT_ANALYSIS_COLUMN_PATCHES: list[tuple[str, str]] = [
-    ("workflow_name", "VARCHAR(64) NOT NULL DEFAULT 'contract_review'"),
-    ("current_step", "VARCHAR(64) NOT NULL DEFAULT 'queued'"),
-    ("attempt", "INT NOT NULL DEFAULT 1"),
-    ("model_name", "VARCHAR(128) NULL"),
-    ("prompt_version", "VARCHAR(32) NOT NULL DEFAULT 'v1'"),
-    ("started_at", "TIMESTAMP NULL"),
-]
+CONTRACT_TABLE_NAMES = frozenset(
+    {
+        "contract_customers",
+        "contracts",
+        "contract_versions",
+        "contract_version_contents",
+        "contract_analysis_runs",
+        "contract_clauses",
+        "contract_risks",
+        "contract_review_selections",
+    }
+)
 
 
 def _apply_session_column_patches(sync_conn) -> None:
@@ -44,37 +48,48 @@ def _apply_session_column_patches(sync_conn) -> None:
         logger.info("schema patch: added %s.%s", table, column)
 
 
-def _apply_contract_analysis_column_patches(sync_conn) -> None:
-    insp = inspect(sync_conn)
-    if "contract_analysis_runs" not in set(insp.get_table_names()):
-        return
-    existing = {column["name"] for column in insp.get_columns("contract_analysis_runs")}
-    for column, ddl in _CONTRACT_ANALYSIS_COLUMN_PATCHES:
-        if column in existing:
-            continue
-        sync_conn.execute(
-            text(f'ALTER TABLE "contract_analysis_runs" ADD COLUMN "{column}" {ddl}')
-        )
-        logger.info("schema patch: added contract_analysis_runs.%s", column)
+def _legacy_tables(metadata):
+    return [
+        table
+        for table in metadata.sorted_tables
+        if table.name not in CONTRACT_TABLE_NAMES
+    ]
+
+
+def _contract_runtime_tables_exist(sync_conn) -> bool:
+    tables = set(inspect(sync_conn).get_table_names())
+    return {"contract_versions", "contract_analysis_runs"}.issubset(tables)
 
 
 async def init_db_tables() -> None:
-    """启动时创建缺失表，并补齐已有会话表的 status/token 列。"""
+    """兼容初始化旧模块表；Contract Schema 必须先由 Alembic 建立。"""
     from app.models import Base
-    from infrastructure.db.models.analysis import AnalysisRunModel
+    from infrastructure.db.models.analysis import AnalysisRunModel  # noqa: F401
+    from infrastructure.db.models.contract import ContractModel  # noqa: F401
+    from infrastructure.db.models.customer import CustomerModel  # noqa: F401
     from infrastructure.db.models.review import (
         ContractClauseModel,
         ContractReviewSelectionModel,
         ContractRiskModel,
         ContractVersionContentModel,
     )
+    from infrastructure.db.models.version import ContractVersionModel  # noqa: F401
 
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        tables = _legacy_tables(Base.metadata)
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
         await conn.run_sync(_apply_session_column_patches)
-        await conn.run_sync(_apply_contract_analysis_column_patches)
-        await conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_contract_version_number ON contract_versions (contract_id, number)'))
-        # Demo uses a single API process. Interrupted jobs become retryable after restart.
+
+
+async def recover_interrupted_contract_reviews() -> None:
+    """Runtime recovery only; this function never creates or alters schema."""
+    async with engine.begin() as conn:
+        if not await conn.run_sync(_contract_runtime_tables_exist):
+            logger.warning(
+                "Contract Schema 尚未迁移，跳过中断任务恢复；请先运行 alembic upgrade head"
+            )
+            return
+
         interrupted = "('pending','parsing','analyzing')"
         await conn.execute(
             text(
@@ -89,13 +104,6 @@ async def init_db_tables() -> None:
                 "error='服务重启中断了分析，请重新分析', "
                 "finished_at=COALESCE(finished_at, CURRENT_TIMESTAMP) "
                 f"WHERE status IN {interrupted}"
-            )
-        )
-        await conn.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_contract_active_analysis "
-                "ON contract_analysis_runs (version_id) "
-                "WHERE status IN ('pending','parsing','analyzing')"
             )
         )
 
