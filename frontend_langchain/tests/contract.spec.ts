@@ -25,6 +25,7 @@ const completed = {
 };
 
 async function setup(page: Page) {
+  let selectedRun = 'r2';
   await page.route('http://127.0.0.1:5180/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     let data: unknown;
@@ -35,8 +36,41 @@ async function setup(page: Page) {
         route.request().method() === 'POST'
           ? { id: 'demo', title: '采购合同', customer_id: 1 }
           : { contracts: [{ id: 'demo', title: '采购合同', customer_id: 1 }] };
-    else if (path.endsWith('/analysis')) data = completed;
-    else if (path.endsWith('/versions/upload')) data = { version_id: 'v1', run_id: 'r1' };
+    else if (path.endsWith('/analysis'))
+      data = {
+        ...completed,
+        id: 'r2',
+        latest_run_id: 'r2',
+        selected_run_id: selectedRun,
+        is_showing_previous: selectedRun !== 'r2',
+      };
+    else if (path.endsWith('/analysis-runs'))
+      data = {
+        selected_run_id: selectedRun,
+        runs: [
+          {
+            id: 'r2',
+            status: 'completed',
+            current_step: 'review_required',
+            attempt: 2,
+            prompt_version: 'v1',
+            selected: selectedRun === 'r2',
+          },
+          {
+            id: 'r1',
+            status: 'completed',
+            current_step: 'review_required',
+            attempt: 1,
+            prompt_version: 'v1',
+            selected: selectedRun === 'r1',
+          },
+        ],
+      };
+    else if (path.includes('/analysis-runs/') && path.endsWith('/select')) {
+      const segments = path.split('/');
+      selectedRun = segments[segments.length - 2] || selectedRun;
+      data = { ...completed, latest_run_id: 'r2', selected_run_id: selectedRun };
+    } else if (path.endsWith('/versions/upload')) data = { version_id: 'v1', run_id: 'r1' };
     else if (path.endsWith('/versions'))
       data = {
         versions: [
@@ -123,6 +157,16 @@ test('failed analysis can be retried', async ({ page }) => {
   await page.goto('/contracts/demo');
   await expect(page.getByText('服务超时')).toBeVisible();
   await page.getByRole('button', { name: '重新分析' }).click();
+  await expect(page.getByText('单方解约风险')).toBeVisible();
+});
+
+test('a previous successful analysis can be selected without deleting history', async ({
+  page,
+}) => {
+  await page.goto('/contracts/demo');
+  await page.getByLabel('分析历史').first().click();
+  await page.getByText('第 1 次 · 分析成功', { exact: true }).click();
+  await expect(page.getByText('当前展示的是历史成功结果')).toBeVisible();
   await expect(page.getByText('单方解约风险')).toBeVisible();
 });
 

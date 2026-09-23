@@ -1,29 +1,30 @@
 import { sendRequest } from '../../../services/request';
-import type { Contract, ContractVersion, Customer } from '../types';
-
-type ApiResponse<T> = { success: boolean; msg?: string; data?: T };
+import type { ApiResponse, Contract, ContractVersion, Customer } from '../types';
 
 export const listCustomers = () =>
-  sendRequest('/api/customers', 'GET') as Promise<ApiResponse<{ customers: Customer[] }>>;
+  sendRequest<ApiResponse<{ customers: Customer[] }>>('/api/customers', 'GET');
 
 export const createCustomer = (params: { name: string; email: string }) =>
-  sendRequest('/api/customers', 'POST', params) as Promise<ApiResponse<Customer>>;
+  sendRequest<ApiResponse<Customer>>('/api/customers', 'POST', params);
 
 export const listContracts = () =>
-  sendRequest('/api/contracts', 'GET') as Promise<ApiResponse<{ contracts: Contract[] }>>;
+  sendRequest<ApiResponse<{ contracts: Contract[] }>>('/api/contracts', 'GET');
 
 export const createContract = (params: { customer_id: number; title: string }) =>
-  sendRequest('/api/contracts', 'POST', params) as Promise<ApiResponse<Contract>>;
+  sendRequest<ApiResponse<Contract>>('/api/contracts', 'POST', params);
 
 export const listContractVersions = (contractId: string) =>
-  sendRequest(`/api/contracts/${contractId}/versions`, 'GET') as Promise<
-    ApiResponse<{ versions: ContractVersion[] }>
-  >;
+  sendRequest<ApiResponse<{ versions: ContractVersion[] }>>(
+    `/api/contracts/${contractId}/versions`,
+    'GET',
+  );
 
 export const createContractVersion = (
   contractId: string,
   params: { source_key: string; filename: string },
 ) =>
-  sendRequest(`/api/contracts/${contractId}/versions`, 'POST', params) as Promise<
-    ApiResponse<ContractVersion>
-  >;
+  sendRequest<ApiResponse<ContractVersion>>(
+    `/api/contracts/${contractId}/versions`,
+    'POST',
+    params,
+  );

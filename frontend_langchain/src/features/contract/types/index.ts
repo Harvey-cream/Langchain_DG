@@ -1,3 +1,9 @@
+export type ApiResponse<T> = {
+  success: boolean;
+  msg?: string;
+  data?: T;
+};
+
 export type Customer = {
   id: number;
   name: string;

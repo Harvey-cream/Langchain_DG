@@ -30,7 +30,7 @@ apiClient.interceptors.request.use(
   },
   (error) => {
     return Promise.reject(error);
-  }
+  },
 );
 
 // 响应拦截器
@@ -52,7 +52,7 @@ const setupResponseInterceptor = (client: AxiosInstance) => {
         console.error('Request Error:', error.message);
       }
       return Promise.reject(error);
-    }
+    },
   );
 };
 
@@ -61,31 +61,44 @@ setupResponseInterceptor(apiClient);
 setupResponseInterceptor(releaseClient);
 
 // 通用请求方法
-export const sendRequest = async (url: string, method: string, data?: any, timeout?: number): Promise<any> => {
+export const sendRequest = async <T = AxiosResponse['data']>(
+  url: string,
+  method: string,
+  data?: AxiosRequestConfig['data'],
+  timeout?: number,
+): Promise<T> => {
   const config: AxiosRequestConfig = {
     url,
     method,
     data,
     ...(timeout ? { timeout } : {}),
   };
-  const response = await apiClient(config);
+  const response = await apiClient.request<T>(config);
   return response.data;
 };
 
 // 不需要认证的请求方法
-export const sendReleaseRequest = async (url: string, method: string, data?: any, timeout?: number): Promise<any> => {
+export const sendReleaseRequest = async <T = AxiosResponse['data']>(
+  url: string,
+  method: string,
+  data?: AxiosRequestConfig['data'],
+  timeout?: number,
+): Promise<T> => {
   const config: AxiosRequestConfig = {
     url,
     method,
     data,
     ...(timeout ? { timeout } : {}),
   };
-  const response = await releaseClient(config);
+  const response = await releaseClient.request<T>(config);
   return response.data;
 };
 
 // 文件上传请求方法
-export const sendUploadRequest = async (url: string, data: FormData): Promise<any> => {
+export const sendUploadRequest = async <T = AxiosResponse['data']>(
+  url: string,
+  data: FormData,
+): Promise<T> => {
   const config: AxiosRequestConfig = {
     url,
     method: 'POST',
@@ -95,6 +108,6 @@ export const sendUploadRequest = async (url: string, data: FormData): Promise<an
       'Content-Type': 'multipart/form-data',
     },
   };
-  const response = await apiClient(config);
+  const response = await apiClient.request<T>(config);
   return response.data;
 };

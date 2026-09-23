@@ -8,7 +8,13 @@ const riskLevels = {
   low: { label: '低风险', color: 'blue' },
 };
 
-export function AnalysisResult({ result }: { result: NonNullable<Analysis['result']> }) {
+export function AnalysisResult({
+  result,
+  clauses = [],
+}: {
+  result: NonNullable<Analysis['result']>;
+  clauses?: NonNullable<Analysis['clauses']>;
+}) {
   const details = [
     ['签约双方', result.parties.join(' / ')],
     ['合同金额', result.amount],
@@ -41,6 +47,20 @@ export function AnalysisResult({ result }: { result: NonNullable<Analysis['resul
           </>
         )}
       </div>
+      {clauses.length > 0 && (
+        <div className="clause-list">
+          <h3>关键条款</h3>
+          {clauses.map((clause) => (
+            <article key={clause.id} className="clause-card">
+              <span>#{clause.sequence}</span>
+              <div>
+                <strong>{clause.title}</strong>
+                <p>{clause.summary || clause.original_text}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
       <div className="risk-counts">
         {(Object.keys(riskLevels) as Array<keyof typeof riskLevels>).map((level) => (
           <span key={level}>

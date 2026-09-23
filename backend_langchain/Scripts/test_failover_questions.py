@@ -1,4 +1,4 @@
-"""用 20 条真实用户问题压测多模型兜底链（claude -> luna -> gemini）。
+"""用 20 条真实用户问题压测多模型兜底链（gemini -> luna -> claude）。
 
 在 backend_langchain 目录运行：
     python -m scripts.test_failover_questions                 # 顺序跑全部 20 条

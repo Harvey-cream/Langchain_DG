@@ -4,10 +4,13 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { listContractVersions } from '../../features/contract/api';
 import {
   getContract,
+  listAnalysisRuns,
+  selectAnalysisRun,
   uploadContract,
   retryAnalysis,
   errorText,
 } from '../../features/contract/api/demo';
+import type { AnalysisRun } from '../../features/contract/api/demo';
 import { useContractAnalysis } from '../../features/contract/hooks/useContractAnalysis';
 import { AnalysisResult } from '../../features/contract/components/AnalysisResult';
 import type { ContractVersion } from '../../features/contract/types';
@@ -28,12 +31,32 @@ export default function ContractVersionPage() {
   const [versions, setVersions] = useState<ContractVersion[]>([]);
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [runs, setRuns] = useState<AnalysisRun[]>([]);
   const [pageError, setPageError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const { analysis, loading, error } = useContractAnalysis(contractId, selected, refreshKey);
   const running = Boolean(
     analysis && ['pending', 'parsing', 'analyzing'].includes(analysis.status),
   );
+
+  useEffect(() => {
+    let disposed = false;
+    if (!selected) {
+      setRuns([]);
+      return;
+    }
+    listAnalysisRuns(contractId, selected)
+      .then((response) => {
+        if (!disposed) setRuns(response.data?.runs ?? []);
+      })
+      .catch((cause) => {
+        if (!disposed) setPageError(errorText(cause));
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [contractId, selected, refreshKey, analysis?.latest_run_id, analysis?.status]);
 
   useEffect(() => {
     let disposed = false;
@@ -63,6 +86,9 @@ export default function ContractVersionPage() {
     setBusy(true);
     try {
       const response = await uploadContract(contractId, file);
+      if (!response.success || !response.data) {
+        throw new Error(response.msg || '合同上传失败');
+      }
       const list = await listContractVersions(contractId);
       setVersions(list.data?.versions ?? []);
       setSelected(response.data.version_id);
@@ -84,6 +110,20 @@ export default function ContractVersionPage() {
       message.error(errorText(cause));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function selectRun(runId: string) {
+    if (!selected || runId === analysis?.selected_run_id) return;
+    setHistoryBusy(true);
+    try {
+      await selectAnalysisRun(contractId, selected, runId);
+      setRefreshKey((key) => key + 1);
+      message.success('已切换到所选历史分析');
+    } catch (cause) {
+      message.error(errorText(cause));
+    } finally {
+      setHistoryBusy(false);
     }
   }
 
@@ -159,6 +199,38 @@ export default function ContractVersionPage() {
               {statusLabels[analysis?.status ?? ''] ?? '等待上传'}
             </Tag>
           </div>
+          {runs.length > 0 && (
+            <div className="analysis-history">
+              <span>展示记录</span>
+              <Select
+                aria-label="分析历史"
+                value={analysis?.selected_run_id ?? undefined}
+                loading={historyBusy}
+                disabled={historyBusy}
+                placeholder="选择一次成功分析"
+                onChange={(runId) => void selectRun(runId)}
+                options={runs.map((run) => ({
+                  value: run.id,
+                  disabled: run.status !== 'completed',
+                  label: `第 ${run.attempt} 次 · ${
+                    run.status === 'completed'
+                      ? '分析成功'
+                      : run.status === 'failed'
+                        ? '分析失败'
+                        : '进行中'
+                  }${run.selected ? ' · 当前展示' : ''}`,
+                }))}
+              />
+            </div>
+          )}
+          {analysis?.is_showing_previous && (
+            <Alert
+              type="info"
+              showIcon
+              message="当前展示的是历史成功结果"
+              description="你可以在“展示记录”中切回其他成功分析，历史结果不会被覆盖。"
+            />
+          )}
           {(loading || running) && (
             <div className="contract-placeholder" role="status">
               <Spin />
@@ -186,7 +258,7 @@ export default function ContractVersionPage() {
           )}
           {analysis?.result && (
             <>
-              <AnalysisResult result={analysis.result} />
+              <AnalysisResult result={analysis.result} clauses={analysis.clauses} />
               <Button onClick={retry} disabled={running} loading={busy}>
                 重新分析
               </Button>

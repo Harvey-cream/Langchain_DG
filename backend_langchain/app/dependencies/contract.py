@@ -9,6 +9,10 @@ from infrastructure.db.repositories.contract import (
     SqlAlchemyContractVersionRepository,
     SqlAlchemyCustomerRepository,
 )
+from infrastructure.db.repositories.contract_review_query import (
+    SqlAlchemyContractReviewQueryRepository,
+)
+from products.contract.application.review_service import ContractReviewApplicationService
 from products.contract.application.services import (
     ContractApplicationService,
     ContractVersionApplicationService,
@@ -40,4 +44,12 @@ def get_contract_version_service(session: AsyncSession = Depends(get_db)) -> Con
         SqlAlchemyContractVersionRepository(session),
         SqlAlchemyContractRepository(session),
         commit=_commit(session),
+    )
+
+
+def get_contract_review_service(
+    session: AsyncSession = Depends(get_db),
+) -> ContractReviewApplicationService:
+    return ContractReviewApplicationService(
+        SqlAlchemyContractReviewQueryRepository(session)
     )

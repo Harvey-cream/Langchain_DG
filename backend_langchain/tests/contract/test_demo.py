@@ -1,5 +1,7 @@
 import unittest
 from io import BytesIO
+from types import SimpleNamespace
+from uuid import uuid4
 from zipfile import ZipFile
 from unittest.mock import patch, AsyncMock
 from infrastructure.document.contract_parser import validate_file, parse_contract
@@ -58,6 +60,115 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         result = ContractAnalysis(document_type='合同', summary='摘要', risks=[Risk(
             title='风险', risk_level='high', original_text='真实条款', reason='原因', suggestion='建议')])
         self.assertEqual(await review_document('真实 条款', AsyncMock(return_value=result)), result)
+
+    async def test_clause_evidence_must_exist(self):
+        from products.contract.application.analysis import review_document
+        from products.contract.schemas.analysis import Clause, ContractAnalysis
+        result = ContractAnalysis(
+            document_type='合同',
+            summary='摘要',
+            clauses=[Clause(title='付款', original_text='编造的付款条款')],
+        )
+        with self.assertRaisesRegex(ValueError, '引用原文'):
+            await review_document('真实合同条款', AsyncMock(return_value=result))
+
+    async def test_risk_clause_sequence_must_reference_a_clause(self):
+        from products.contract.application.analysis import review_document
+        from products.contract.schemas.analysis import Clause, ContractAnalysis, Risk
+        result = ContractAnalysis(
+            document_type='合同',
+            summary='摘要',
+            clauses=[Clause(title='付款', original_text='付款条款')],
+            risks=[Risk(
+                title='风险', risk_level='high', original_text='付款条款',
+                reason='原因', suggestion='建议', clause_sequence=2,
+            )],
+        )
+        with self.assertRaisesRegex(ValueError, '引用原文'):
+            await review_document('付款条款', AsyncMock(return_value=result))
+
+
+class WorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cached_content_skips_parser_and_completes(self):
+        from products.contract.domain.review import ReviewContext, VersionContent
+        from products.contract.schemas.analysis import ContractAnalysis
+        from products.contract.workflows.review_workflow import ContractReviewWorkflow
+
+        context = ReviewContext(uuid4(), uuid4(), 'key', 'contract.docx')
+        content = VersionContent(context.version_id, '真实合同条款', 'hash', 'python-docx')
+        result = ContractAnalysis(document_type='合同', summary='摘要')
+        repository = SimpleNamespace(
+            claim=AsyncMock(return_value=context),
+            get_content=AsyncMock(return_value=content),
+            mark_parsing=AsyncMock(),
+            save_content=AsyncMock(),
+            mark_analyzing=AsyncMock(),
+            complete=AsyncMock(),
+            fail=AsyncMock(),
+        )
+        parser = SimpleNamespace(parse=AsyncMock())
+        reviewer = SimpleNamespace(review=AsyncMock(return_value=result))
+
+        await ContractReviewWorkflow(repository, parser, reviewer).run(context.run_id)
+
+        parser.parse.assert_not_awaited()
+        repository.save_content.assert_not_awaited()
+        repository.mark_analyzing.assert_awaited_once_with(context)
+        repository.complete.assert_awaited_once_with(context, result)
+        repository.fail.assert_not_awaited()
+
+    async def test_new_content_is_saved_before_review(self):
+        from products.contract.domain.review import ReviewContext, VersionContent
+        from products.contract.schemas.analysis import ContractAnalysis
+        from products.contract.workflows.review_workflow import ContractReviewWorkflow
+
+        context = ReviewContext(uuid4(), uuid4(), 'key', 'contract.pdf')
+        content = VersionContent(context.version_id, '合同文字', 'hash', 'pdfplumber')
+        repository = SimpleNamespace(
+            claim=AsyncMock(return_value=context),
+            get_content=AsyncMock(return_value=None),
+            mark_parsing=AsyncMock(),
+            save_content=AsyncMock(),
+            mark_analyzing=AsyncMock(),
+            complete=AsyncMock(),
+            fail=AsyncMock(),
+        )
+        parser = SimpleNamespace(parse=AsyncMock(return_value=content))
+        reviewer = SimpleNamespace(
+            review=AsyncMock(return_value=ContractAnalysis(document_type='合同', summary='摘要'))
+        )
+
+        await ContractReviewWorkflow(repository, parser, reviewer).run(context.run_id)
+
+        parser.parse.assert_awaited_once_with(context)
+        repository.mark_parsing.assert_awaited_once_with(context)
+        repository.save_content.assert_awaited_once_with(content)
+
+    async def test_failure_is_persisted(self):
+        from products.contract.domain.review import ReviewContext, VersionContent
+        from products.contract.workflows.review_workflow import ContractReviewWorkflow
+
+        context = ReviewContext(uuid4(), uuid4(), 'key', 'contract.docx')
+        content = VersionContent(context.version_id, '合同文字', 'hash', 'python-docx')
+        repository = SimpleNamespace(
+            claim=AsyncMock(return_value=context),
+            get_content=AsyncMock(return_value=content),
+            mark_parsing=AsyncMock(),
+            save_content=AsyncMock(),
+            mark_analyzing=AsyncMock(),
+            complete=AsyncMock(),
+            fail=AsyncMock(),
+        )
+        parser = SimpleNamespace(parse=AsyncMock())
+        reviewer = SimpleNamespace(review=AsyncMock(side_effect=RuntimeError('provider down')))
+
+        await ContractReviewWorkflow(repository, parser, reviewer).run(context.run_id)
+
+        repository.complete.assert_not_awaited()
+        repository.fail.assert_awaited_once_with(
+            context.run_id,
+            '分析服务暂不可用或超时，请稍后重新分析',
+        )
 
 
 if __name__ == '__main__':
