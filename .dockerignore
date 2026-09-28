@@ -9,6 +9,8 @@ venv
 *.md
 # 前端和后端构建无关，排除整个目录
 frontend_langchain/
+# 本地 PDF 导出与字体缓存由运行时 volume 提供，不打进后端镜像
+backend_langchain/common/media/
 # 知识库文档极大，后端构建不需要
 knowledge/
 # 奇怪的系统目录

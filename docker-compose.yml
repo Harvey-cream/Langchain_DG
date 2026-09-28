@@ -68,7 +68,7 @@ services:
     volumes:
       - langgraph_data:/app/app/data/runtime
       - huggingface_cache:/root/.cache/huggingface
-      - ./media:/app/media
+      - ./backend_langchain/common/media:/app/common/media
       - ./backend_langchain/env/settings_pro.yaml:/app/env/settings_pro.yaml:ro
     ports:
       # 便于宿主机直连后端（前端 Vite 代理 / 本地调试）；对外入口仍是 nginx:80。
@@ -98,10 +98,8 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
-      - ./nginx/conf/wx-sercret:/etc/nginx/wx-sercret:ro
       - ./frontend_langchain/dist:/usr/share/nginx/html:ro
-      - ./static:/app/static:ro
-      - ./media:/app/media:ro
+      - ./backend_langchain/common/media:/app/common/media:ro
     ports:
       - "80:80"
       # 有证书后再加 "443:443"，并在 nginx/nginx.conf 取消 HTTPS 段注释

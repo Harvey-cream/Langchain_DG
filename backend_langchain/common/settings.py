@@ -277,7 +277,7 @@ VECTOR_POSTGRES_URL = (
 )
 
 # --- 应用 ---
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = BASE_DIR / "common" / "media"
 MEDIA_URL = "/media/"
 
 DEBUG = (

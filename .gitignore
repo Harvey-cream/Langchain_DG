@@ -79,8 +79,6 @@ wheels/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
-media/
-static/
 
 # PyCharm
 .idea/
@@ -132,6 +130,6 @@ backend_langchain/products/interview/data/runtime/clean_chunk_preview/
 backend_langchain/products/interview/data/runtime/cleanup_benchmark.json
 
 # PDF 导出落盘与本地字体缓存（运行时生成）
-backend_langchain/media/
+/backend_langchain/common/media/
 backend_langchain/products/interview/data/runtime/pdf_exports/
 backend_langchain/products/interview/data/runtime/pdf_fonts/

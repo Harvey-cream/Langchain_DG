@@ -154,7 +154,7 @@ Customer
 
 The Document Parser, Diff Engine, Version Manager, PDF Renderer and Email Worker are plain services, not Agents. Review, revision and negotiation are decision-making capabilities, and only those use Agents.
 
-> Design decisions are recorded in [`docs/adr/`](./docs/adr): product isolation, domain separation, workflow-first, agent runtime boundary, business state vs checkpoint, durable background jobs, and the SSE transport boundary.
+> Design decisions are recorded in [`backend_langchain/common/docs/adr/`](./backend_langchain/common/docs/adr): product isolation, domain separation, workflow-first, agent runtime boundary, business state vs checkpoint, durable background jobs, and the SSE transport boundary.
 
 ---
 
@@ -355,7 +355,7 @@ npm run dev
 
 ### Interview Agent (secondary / evolving independently)
 
-The Interview Agent remains an independent product line, business-isolated from Contract. It owns its Agent runtime, RAG, and Memory code; the two products only share authentication, database, configuration, object storage, and integrations under `common`. Product lines must **never import each other** (see [ADR 0001](./docs/adr/0001-product-isolation.md)).
+The Interview Agent remains an independent product line, business-isolated from Contract. It owns its Agent runtime, RAG, and Memory code; the two products only share authentication, database, configuration, object storage, and integrations under `common`. Product lines must **never import each other** (see [ADR 0001](./backend_langchain/common/docs/adr/0001-product-isolation.md)).
 
 ### Legacy Knowledge Base
 

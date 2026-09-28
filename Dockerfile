@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 COPY backend_langchain/ /app/
 
-RUN mkdir -p /app/common/data /app/media
+RUN mkdir -p /app/common/data /app/common/media
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "120"]

@@ -154,7 +154,7 @@ Customer
 
 Document Parser、Diff Engine、Version Manager、PDF Renderer、Email Worker 是普通服务，不是 Agent；Review、Revision、Negotiation 属于智能决策能力，才使用 Agent。
 
-> 设计决策记录见 [`docs/adr/`](./docs/adr)：产品隔离、领域分离、Workflow First、Agent Runtime 边界、业务状态 vs Checkpoint、持久化后台任务、SSE 传输边界。
+> 设计决策记录见 [`backend_langchain/common/docs/adr/`](./backend_langchain/common/docs/adr)：产品隔离、领域分离、Workflow First、Agent Runtime 边界、业务状态 vs Checkpoint、持久化后台任务、SSE 传输边界。
 
 ---
 
@@ -355,7 +355,7 @@ npm run dev
 
 ### Interview Agent（次要 / 并行演进）
 
-现有 Interview Agent 作为独立产品线继续保留，与 Contract 产品业务隔离。Interview 自己持有 Agent Runtime / RAG / Memory；两条线只共用 `common` 下的鉴权、数据库、配置、对象存储和外部集成。产品线之间**严禁互相 import**（见 [ADR 0001](./docs/adr/0001-product-isolation.md)）。
+现有 Interview Agent 作为独立产品线继续保留，与 Contract 产品业务隔离。Interview 自己持有 Agent Runtime / RAG / Memory；两条线只共用 `common` 下的鉴权、数据库、配置、对象存储和外部集成。产品线之间**严禁互相 import**（见 [ADR 0001](./backend_langchain/common/docs/adr/0001-product-isolation.md)）。
 
 ### Legacy 知识库
 
