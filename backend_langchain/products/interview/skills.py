@@ -1,7 +1,7 @@
-"""面试 Agent 线 Skill 目录（业务归属本产品线，引擎见 infrastructure.rag.skill_router）。"""
+"""面试 Agent 线 Skill 目录（业务归属本产品线，引擎见本产品的 rag.skill_router）。"""
 from __future__ import annotations
 
-from infrastructure.rag.skill_router import SkillSpec
+from products.interview.rag.skill_router import SkillSpec
 
 INTERVIEW_SKILLS: tuple[SkillSpec, ...] = (
     SkillSpec(

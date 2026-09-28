@@ -1,4 +1,6 @@
-# Agent 架构
+# Agent 架构（历史设计草案）
+
+> 本文保留早期 Knowledge / Interview Agent 设计记录，不代表当前目录结构。当前代码以 `README.md` 的“当前目录边界”为准：合同代码位于 `products/contract`，面试 Agent、Runtime、RAG 与 Memory 位于 `products/interview`，真正跨产品复用的能力位于 `common`。
 ## 总览（纯文本 · 任意编辑器可见）
 
 ```
@@ -52,8 +54,8 @@ Async Memory Writer      # 不挡 SSE
 
 | 层 | 说明 |
 |----|------|
-| **Context Builder** | `runtime/context/builder.py`；`turn_context` 注入 `configurable`；`retrieved_context` 预填 State |
-| **Retrieval Planner** | `infrastructure/rag/retrieval_planner.py`；一次 LLM 合并原 Gate+Rewrite |
+| **Context Builder** | `products/interview/agent/context/builder.py`；`turn_context` 注入 `configurable`；`retrieved_context` 预填 State |
+| **Retrieval Planner** | `products/interview/rag/retrieval_planner.py`；一次 LLM 合并原 Gate+Rewrite |
 | **Cascade Router** | `products/knowledge/cascade.py`；进 `products/knowledge/supervisor.py` 的 `route` 节点 |
 | **Memory 读** | `should_retrieve_memory` 按需；写路径仍异步后置 |
 
@@ -73,8 +75,8 @@ products/<line>/subagents/<name>/
 
 ```
 products/knowledge  ✗→  products/interview      两条线互不 import
-products/*          ✓→  runtime/ infrastructure/
-runtime/            ✗→  products/               Runtime 不含业务
+products/*          ✓→  common/
+common/             ✗→  products/               公共层不含产品业务
 ```
 
 | 规范 | 说明 |
@@ -90,7 +92,7 @@ runtime/            ✗→  products/               Runtime 不含业务
 对话子图典型边：`START → skill_recall → agent (↔ tools) → END`。  
 Memory 写图：`START → trigger → extract → apply → END`。
 
-参考实现：`products/knowledge/subagents/{doc_summary,knowledge_qa}`、`infrastructure/memory/agent`；总控：`products/knowledge/supervisor.py`。
+当前实现：`products/interview/agent`、`products/interview/memory/agent`；历史 Knowledge 示例已退休。
 
 ## Agent 视图
 
@@ -179,7 +181,7 @@ Workflow 按意图路由子 Agent，可串联：`JD → 模拟 → 评估`。
 
 | 项 | 说明 |
 |----|------|
-| **包路径** | `infrastructure/memory/agent`（`build_memory_agent_graph`） |
+| **包路径** | `products/interview/memory/agent`（`build_memory_agent_graph`） |
 | **时机** | 主回复流式结束、会话落库之后；`asyncio.create_task` → `ainvoke`，不挡 SSE |
 | **Trigger** | 规则过滤（长度 / 偏好关键词等）；无长期价值直接 END |
 | **流水线** | `trigger → extract → apply`；Extract/Decide 用 Pydantic；apply 内 search→decide→upsert |

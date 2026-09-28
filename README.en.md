@@ -53,7 +53,7 @@ The platform follows a **Workflow First, Agent Second** philosophy that decouple
 - **LangGraph** state graphs and resumable execution
 - **PostgreSQL Checkpoint** for agent runtime state, supporting interrupt / resume
 - **SSE streaming** with a pre-graph Context Builder that prepares History / Memory / RAG context in parallel
-- **Context Builder** under `runtime/context`
+- **Context Builder** under `products/interview/agent/context`
 
 ### Platform Capabilities
 
@@ -68,6 +68,26 @@ The platform follows a **Workflow First, Agent Second** philosophy that decouple
 
 ## Architecture
 
+### Current Package Boundaries
+
+```text
+backend_langchain/
+├─ app/                         # FastAPI composition root only
+├─ common/                      # configuration, DB, auth, accounts, storage, MCP
+├─ products/
+│  ├─ contract/                 # API, ORM, queries, documents, workflows, review Agent
+│  └─ interview/                # API, conversations, Agent runtime, RAG, Memory, PDF, corpus
+├─ scripts/{common,contract,interview}/
+└─ tests/{common,contract}/
+
+frontend_langchain/src/
+├─ app/
+├─ common/                      # auth session and HTTP client
+└─ products/{contract,interview}/
+```
+
+The product lines are physically isolated and never import each other. Only capabilities genuinely used by both belong in `common`; code with one domain and one responsibility stays together instead of being split into a Service/Port/Repository layer for every simple use case.
+
 ### Layered View
 
 ```
@@ -77,7 +97,7 @@ The platform follows a **Workflow First, Agent Second** philosophy that decouple
                         FastAPI (HTTP / SSE)
                                 │
                                 ▼
-                    Contract Application Layer
+             FastAPI Router (HTTP + use-case orchestration)
         ┌───────────────────────┼────────────────────────┐
         ▼                       ▼                        ▼
      Domain                  Workflow                  Agents
@@ -103,7 +123,7 @@ The platform follows a **Workflow First, Agent Second** philosophy that decouple
 
 **1. Workflow First, Agent Second**
 
-Agents are not the whole system — workflows control the business process. LLMs and Agents are used only at nodes that genuinely need reasoning, planning, risk analysis, revision or negotiation. Deterministic operations such as CRUD, versioning, diff, parsing, storage, export and email are plain services, engines or workers.
+Agents are not the whole system — workflows control the business process. LLMs and Agents are used only at nodes that genuinely need reasoning, planning, risk analysis, revision or negotiation. Deterministic operations such as CRUD, versioning, diff, parsing, storage, export and email are plain Python modules, engines or workers.
 
 **2. Business State vs Runtime State**
 
@@ -201,8 +221,7 @@ The full contract pipeline under the target architecture:
 backend_langchain/
 ├── app/                          # FastAPI application layer
 │   ├── main.py                   # App entry / lifespan
-│   ├── routers/                  # HTTP routes: user / customer / contract / interview
-│   ├── dependencies/             # Dependency wiring
+│   ├── routers/                  # HTTP routes: user / contract / interview
 │   ├── services/
 │   │   └── document_pipeline/    # Clean / chunk / embed ingest
 │   ├── auth/                     # JWT + SM2
@@ -211,12 +230,11 @@ backend_langchain/
 │
 ├── products/                     # Product lines (never import each other)
 │   ├── contract/                 # Primary product: contract lifecycle
-│   │   ├── domain/               # Contract / Customer / ContractVersion entities & errors
-│   │   ├── application/          # Use-case services + ports
+│   │   ├── domain/               # Document facts / review state values
 │   │   ├── schemas/              # API DTOs
-│   │   ├── workflows/            # Reserved: review workflow (not in Phase 1)
-│   │   ├── agents/               # Reserved: decision-point agents
-│   │   └── policies/             # Reserved: ContractPolicy
+│   │   ├── document_intelligence/# Document structuring pipeline
+│   │   ├── workflows/            # Contract review workflow
+│   │   └── agents/               # Contract review LLM adapter
 │   └── interview/                # Additional product line: interview agent
 │
 ├── runtime/                      # Execution mechanics (no business logic)
@@ -225,22 +243,17 @@ backend_langchain/
 │   ├── checkpoint/               # LangGraph PostgreSQL checkpointer
 │   └── streaming/                # astream → unified events
 │
-├── agent_platform/               # Platform ports
-│   ├── agent_runtime/            # Agent runtime ports / events
-│   ├── document/                 # Document processing port
-│   ├── retrieval/                # Retrieval port
-│   └── storage/                  # Object storage port
+├── agent_platform/
+│   └── storage/                  # Object storage port used by production code
 │
 ├── infrastructure/               # Shared infrastructure adapters
-│   ├── db/                       # SQLAlchemy models / repositories
+│   ├── db/                       # SQLAlchemy Models + complex review persistence
 │   ├── rag/                      # pgvector / planner / rerank / web search
 │   ├── memory/                   # Short-term compression + long-term Memory Agent
 │   ├── oss/                      # Alibaba Cloud OSS adapter
 │   ├── pdf/                      # PDF human confirmation + rendering
-│   ├── queue/                    # JobQueue / Worker ports
 │   └── mcp/                      # MCP multi-server
 │
-├── harness/                      # AgentRun / Trace run records
 ├── migrations/                   # 0001 contract schema / 0002 knowledge retire
 ├── knowledge/                    # docs2 (interview corpus) + retired corpus archive
 ├── scripts/                      # DB build / diagnostics / smoke tests
@@ -257,7 +270,7 @@ frontend_langchain/
     │   ├── contract/             # api / types
     │   └── chat/
     ├── page/                     # Legacy: chat / login & register
-    ├── services/                 # api / chatApi / chatStream / request
+    ├── services/                 # auth API / chatStream / request
     └── utils/                    # sm2
 ```
 
@@ -326,9 +339,9 @@ npm run dev
 - [x] Legacy Knowledge retirement
 - [x] Agent runtime (LangGraph / SSE / checkpoint / Context Builder)
 - [x] Shared infrastructure (RAG / Memory / MCP / OSS / Redis / Docker)
-- [ ] Contract file upload + OSS binding
-- [ ] Document Intelligence → ContractClause
-- [ ] Review Workflow → RiskFinding
+- [x] Contract file upload + OSS binding
+- [x] Document Intelligence → canonical ContractClause
+- [x] Review Workflow V1 → Clause / Risk
 - [ ] Revision + human-in-the-loop
 - [ ] Version diff
 - [ ] Negotiation Agent
@@ -342,7 +355,7 @@ npm run dev
 
 ### Interview Agent (secondary / evolving independently)
 
-The Interview Agent remains as an independent product line, business-isolated from Contract and sharing the underlying Runtime / RAG / Memory capabilities. Product lines must **never import each other** (see [ADR 0001](./docs/adr/0001-product-isolation.md)); they only share platform capabilities.
+The Interview Agent remains an independent product line, business-isolated from Contract. It owns its Agent runtime, RAG, and Memory code; the two products only share authentication, database, configuration, object storage, and integrations under `common`. Product lines must **never import each other** (see [ADR 0001](./docs/adr/0001-product-isolation.md)).
 
 ### Legacy Knowledge Base
 
@@ -350,18 +363,18 @@ The legacy Agent corpus `docs1` is still retained as the current corpus and has 
 
 Note that the **Knowledge product is not the same as RAG capability**. What was retired is the knowledge-base Q&A product; its reusable retrieval / embedding / pgvector capabilities remain as shared infrastructure.
 
-If the interview corpus still needs to be built, it lives at `backend_langchain/knowledge/docs2/<domain>/**/*.pdf`:
+If the interview corpus still needs to be built, it lives at `backend_langchain/products/interview/knowledge/docs2/<domain>/**/*.pdf`:
 
 ```bash
 cd backend_langchain
-python -m scripts.build_rag_knowledge --interview-only
+python -m scripts.interview.build_rag_knowledge --interview-only
 ```
 
 ---
 
 ## Configuration
 
-Primary configuration lives in `backend_langchain/app/settings.py` plus `env/settings_*.yaml`:
+Primary configuration lives in `backend_langchain/common/settings.py` plus `env/settings_*.yaml`:
 
 - `llm_config`: LLM
 - `dashscope_config`: embeddings / rerank / optional web search

@@ -12,12 +12,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.db import init_db_tables, recover_interrupted_contract_reviews
-from app.routers import contract, customer, interview, user
-from app.routers import contract_analysis
-from app.settings import MEDIA_ROOT
-from runtime.checkpoint.checkpointer import close_checkpointer, init_checkpointer
-from logging_config import LOGGING
+from common.account import api as user
+from common.account.models import User
+from common.database import create_tables
+from app.logging_config import LOGGING
+from common.settings import MEDIA_ROOT
+from products.contract import api as contract
+from products.contract.startup import recover_interrupted_contract_reviews
+from products.interview import api as interview
+from products.interview.agent.checkpoint.checkpointer import close_checkpointer, init_checkpointer
+from products.interview.startup import init_interview_tables
 
 logging.config.dictConfig(LOGGING)
 logger = logging.getLogger(__name__)
@@ -36,7 +40,8 @@ def warmup_agent_executors(*, temperature: float = 0.45) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db_tables()
+    await create_tables([User.__table__])
+    await init_interview_tables()
     await recover_interrupted_contract_reviews()
     logger.info("database tables ready")
     await init_checkpointer()
@@ -44,14 +49,14 @@ async def lifespan(app: FastAPI):
     async def _startup_bg() -> None:
         # MCP / warmup 放到后台，避免阻塞会话列表等轻量 API（热重载时尤其明显）
         try:
-            from infrastructure.mcp.mcp_multiserver import aload_mcp_tools_once
+            from common.integrations.mcp.mcp_multiserver import aload_mcp_tools_once
 
             await aload_mcp_tools_once()
         except Exception:
             logger.exception("MCP startup preload failed (will retry on first tool build)")
         if os.environ.get("SKIP_RAG_STARTUP_WARMUP", "").lower() not in ("1", "true", "yes"):
             try:
-                from infrastructure.rag.skill_router import warmup_skill_phrase_cache
+                from products.interview.rag.skill_router import warmup_skill_phrase_cache
                 from products.interview.skills import INTERVIEW_SKILLS
 
                 await asyncio.to_thread(
@@ -103,9 +108,7 @@ app.mount("/media", StaticFiles(directory=str(MEDIA_ROOT)), name="media")
 
 app.include_router(user.router)
 app.include_router(interview.router)
-app.include_router(customer.router)
 app.include_router(contract.router)
-app.include_router(contract_analysis.router)
 
 
 @app.get("/health")

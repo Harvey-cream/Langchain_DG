@@ -53,7 +53,7 @@ LangChain DG 是一个**企业合同全生命周期 AI Agent 平台**。系统�
 - **LangGraph** 状态图与可恢复执行
 - **PostgreSQL Checkpoint**：保存 Agent 运行时状态，支持 interrupt / resume
 - **SSE 流式**：图前 Context Builder 并行准备 History / Memory / RAG 上下文
-- **Context Builder**：`runtime/context`，图前并行装配上下文
+- **Context Builder**：`products/interview/agent/context`，图前并行装配面试上下文
 
 ### 平台能力
 
@@ -68,6 +68,26 @@ LangChain DG 是一个**企业合同全生命周期 AI Agent 平台**。系统�
 
 ## 架构
 
+### 当前目录边界
+
+```text
+backend_langchain/
+├─ app/                         # FastAPI 组合入口，只负责挂载各产品路由
+├─ common/                      # 两条产品线真正共用的配置、数据库、鉴权、账号、存储、MCP
+├─ products/
+│  ├─ contract/                 # 合同 API、ORM、查询、文档处理、工作流与审查 Agent
+│  └─ interview/                # 面试 API、会话、Agent Runtime、RAG、Memory、PDF 与语料
+├─ scripts/{common,contract,interview}/
+└─ tests/{common,contract}/
+
+frontend_langchain/src/
+├─ app/                         # SPA 入口页面
+├─ common/                      # 登录态与 HTTP 客户端
+└─ products/{contract,interview}/
+```
+
+代码按产品线物理隔离。`contract` 与 `interview` 不互相 import；只有确实被两边使用的能力才放入 `common`。同一领域、同一职责的代码优先收拢，不为每个简单用例额外建立 Service / Port / Repository 层。
+
 ### 分层视图
 
 ```
@@ -77,7 +97,7 @@ LangChain DG 是一个**企业合同全生命周期 AI Agent 平台**。系统�
                         FastAPI (HTTP / SSE)
                                 │
                                 ▼
-                    Contract Application Layer
+              FastAPI Router（HTTP + 用例编排）
         ┌───────────────────────┼────────────────────────┐
         ▼                       ▼                        ▼
      Domain                  Workflow                  Agents
@@ -103,7 +123,7 @@ LangChain DG 是一个**企业合同全生命周期 AI Agent 平台**。系统�
 
 **1. Workflow First, Agent Second**
 
-Agent 不是整个系统，业务流程由 Workflow 控制。LLM / Agent 只进入真正需要 reasoning、planning、risk analysis、revision、negotiation 的节点；CRUD、Version、Diff、Parsing、Storage、Export、Email 等确定性逻辑使用普通 Service / Engine / Worker。
+Agent 不是整个系统，业务流程由 Workflow 控制。LLM / Agent 只进入真正需要 reasoning、planning、risk analysis、revision、negotiation 的节点；CRUD、Version、Diff、Parsing、Storage、Export、Email 等确定性逻辑使用普通 Python 模块 / Engine / Worker。
 
 **2. Business State 与 Runtime State 分离**
 
@@ -201,8 +221,7 @@ Document Parser、Diff Engine、Version Manager、PDF Renderer、Email Worker �
 backend_langchain/
 ├── app/                          # FastAPI 应用层
 │   ├── main.py                   # 应用入口 / lifespan
-│   ├── routers/                  # HTTP 路由：user / customer / contract / interview
-│   ├── dependencies/             # 依赖注入装配
+│   ├── routers/                  # HTTP 路由：user / contract / interview
 │   ├── services/
 │   │   └── document_pipeline/    # 文档清洗 / 切块 / 向量化 ingest
 │   ├── auth/                     # JWT + SM2
@@ -211,12 +230,11 @@ backend_langchain/
 │
 ├── products/                     # 产品线（互不 import）
 │   ├── contract/                 # 第一产品线：合同全生命周期
-│   │   ├── domain/               # Contract / Customer / ContractVersion 实体与错误
-│   │   ├── application/          # 用例服务 + Ports
+│   │   ├── domain/               # 文档事实 / 审查状态值对象
 │   │   ├── schemas/              # API DTO
-│   │   ├── workflows/            # 预留：审查工作流（Phase 1 未实现）
-│   │   ├── agents/               # 预留：决策点 Agent
-│   │   └── policies/             # 预留：ContractPolicy
+│   │   ├── document_intelligence/# 文档结构化流水线
+│   │   ├── workflows/            # 合同审查工作流
+│   │   └── agents/               # 合同审查 LLM 适配
 │   └── interview/                # 其他产品线：面试 Agent
 │
 ├── runtime/                      # 运行机制（无业务）
@@ -225,22 +243,17 @@ backend_langchain/
 │   ├── checkpoint/               # LangGraph PostgreSQL checkpointer
 │   └── streaming/                # astream → 统一事件
 │
-├── agent_platform/               # 平台端口（Ports）
-│   ├── agent_runtime/            # Agent 运行时端口 / 事件
-│   ├── document/                 # 文档处理端口
-│   ├── retrieval/                # 检索端口
-│   └── storage/                  # 对象存储端口
+├── agent_platform/
+│   └── storage/                  # 当前实际使用的对象存储端口
 │
 ├── infrastructure/               # 共享底座适配器
-│   ├── db/                       # SQLAlchemy models / repositories
+│   ├── db/                       # SQLAlchemy Models + 复杂审查持久化
 │   ├── rag/                      # pgvector / Planner / Rerank / WebSearch
 │   ├── memory/                   # 短期压缩 + 长期 Memory Agent
 │   ├── oss/                      # 阿里云 OSS 适配
 │   ├── pdf/                      # PDF 人机确认 + 渲染
-│   ├── queue/                    # JobQueue / Worker 端口
 │   └── mcp/                      # MCP 多服务
 │
-├── harness/                      # AgentRun / Trace 运行留痕
 ├── migrations/                   # 0001 contract schema / 0002 knowledge retire
 ├── knowledge/                    # docs2（Interview 语料）+ 已退休语料归档
 ├── scripts/                      # 建库 / 诊断 / smoke
@@ -257,7 +270,7 @@ frontend_langchain/
     │   ├── contract/             # api / types
     │   └── chat/
     ├── page/                     # Legacy：对话 / 登录注册
-    ├── services/                 # api / chatApi / chatStream / request
+    ├── services/                 # 认证 API / chatStream / request
     └── utils/                    # sm2
 ```
 
@@ -326,9 +339,9 @@ npm run dev
 - [x] Legacy Knowledge 产品退休
 - [x] Agent Runtime（LangGraph / SSE / Checkpoint / Context Builder）
 - [x] 共享基础设施（RAG / Memory / MCP / OSS / Redis / Docker）
-- [ ] Contract 文件上传 + OSS 绑定
-- [ ] Document Intelligence → ContractClause
-- [ ] Review Workflow → RiskFinding
+- [x] Contract 文件上传 + OSS 绑定
+- [x] Document Intelligence → Canonical ContractClause
+- [x] Review Workflow V1 → Clause / Risk
 - [ ] Revision + Human-in-the-loop
 - [ ] Version Diff
 - [ ] Negotiation Agent
@@ -342,7 +355,7 @@ npm run dev
 
 ### Interview Agent（次要 / 并行演进）
 
-现有 Interview Agent 作为独立产品线继续保留，与 Contract 产品业务隔离，共享 Runtime / RAG / Memory 等底层能力。产品线之间**严禁互相 import**（见 [ADR 0001](./docs/adr/0001-product-isolation.md)），只共用底层平台能力。
+现有 Interview Agent 作为独立产品线继续保留，与 Contract 产品业务隔离。Interview 自己持有 Agent Runtime / RAG / Memory；两条线只共用 `common` 下的鉴权、数据库、配置、对象存储和外部集成。产品线之间**严禁互相 import**（见 [ADR 0001](./docs/adr/0001-product-isolation.md)）。
 
 ### Legacy 知识库
 
@@ -350,18 +363,18 @@ npm run dev
 
 需要说明的是：**Knowledge 产品 ≠ RAG 能力**。退休的是知识库问答产品，其中可复用的 retrieval / embedding / pgvector 能力继续作为底层能力服务新产品。
 
-如仍需构建 Interview 语料，语料位于 `backend_langchain/knowledge/docs2/<domain>/**/*.pdf`：
+如仍需构建 Interview 语料，语料位于 `backend_langchain/products/interview/knowledge/docs2/<domain>/**/*.pdf`：
 
 ```bash
 cd backend_langchain
-python -m scripts.build_rag_knowledge --interview-only
+python -m scripts.interview.build_rag_knowledge --interview-only
 ```
 
 ---
 
 ## 配置说明
 
-主要配置：`backend_langchain/app/settings.py` + `env/settings_*.yaml`：
+主要配置：`backend_langchain/common/settings.py` + `env/settings_*.yaml`：
 
 - `llm_config`：大模型
 - `dashscope_config`：嵌入 / 精排 / 可选联网

@@ -1,6 +1,6 @@
 # Contract Demo v0.2
 
-长期架构基线：Product / Application / Workflow / Agent / Runtime / Harness / Infrastructure 分层；合同版本不可变，业务事实在 PostgreSQL，文件在 OSS，向量检索使用 pgvector。后续逐步实现 Clause、Policy、HITL、Diff、DOCX Patch、邮件与谈判。
+长期架构基线：按真实职责保留 Router / Domain / Workflow / Agent / Infrastructure 边界，不为每个用例额外创建 Service、Port 和 Store；合同版本不可变，业务事实在 PostgreSQL，文件在 OSS，向量检索使用 pgvector。
 
 本次实现：PDF/DOCX 上传、版本创建、后台文本解析、AI 结构化审查、结果与原文持久化、双栏工作台、版本选择、失败重试；同一合同版本只解析一次，每次重新分析保留独立记录，并可切换回任意历史成功结果。
 
@@ -25,7 +25,7 @@
 - 最多 20 MB、100 页 PDF、8 万字符；不静默截断，扫描件提示改用文字版。
 - 通过已配置的模型服务分析全文；通用商业审查，不接旧 docs1 知识库。
 - BackgroundTasks 单 API 进程；任务使用原子状态抢占避免重复执行，版本状态与分析状态同步。启动时把中断任务和对应版本标记失败，用户可重试。下一步替换成 Redis Worker 和任务租约。
-- 合同审查编排位于 `products/contract/workflows/review_workflow.py`，通过 Parser / Reviewer / Repository ports 调用基础设施；`infrastructure/document/contract_jobs.py` 只负责创建任务和组装运行时依赖。
+- HTTP 用例编排和只由接口使用的 ORM 查询直接位于 `products/contract/api.py`；后台审查与 Document Facts 共用的复杂事务保留在 `products/contract/db.py`。合同审查编排位于 `products/contract/workflows/review_workflow.py`，Parser / Reviewer / OSS 仍保留真实的外部能力边界；`products/contract/document/contract_jobs.py` 只负责组装后台分析依赖。
 - 尚未支持自动导出、人工确认、Diff、邮件与谈判；分析结果不代表人工最终决策。
 - 原合同只保存在私有 OSS，API 的原文与分析查询检查合同归属。
 
@@ -35,7 +35,7 @@
 
 前端格式：`npm run format:contract`；浏览器回归：`npm run test:contract`（默认使用本机 Edge）。浏览器测试使用模拟 API，独立于下面的真实服务联调。
 
-真实服务联调：`python -m Scripts.test_contract_demo_live`。会用虚构合同调用 OSS、PostgreSQL 和已配置的模型，并清理自己创建的记录和文件。加 `--mock-review` 可在保留真实数据库/OSS 的同时模拟模型结果，验证并发版本、无效文件、重试及用户隔离。
+真实服务联调：`python -m scripts.contract.test_contract_demo_live`。会用虚构合同调用 OSS、PostgreSQL 和已配置的模型，并清理自己创建的记录和文件。加 `--mock-review` 可在保留真实数据库/OSS 的同时模拟模型结果，验证并发版本、无效文件、重试及用户隔离。
 
 ## Phase 0 基线（2026-09-18）
 
@@ -58,7 +58,7 @@
 - 12 项后端解析、证据校验和工作流单元测试通过。
 - TypeScript、Vite 生产构建和合同范围 ESLint 通过。
 - 7 项 Playwright 浏览器场景通过，新增历史成功分析切换且不删除其他记录的回归测试。
-- 部署前仍需在可用的 PostgreSQL / OSS 环境执行 `python -m Scripts.test_contract_demo_live --mock-review`，再用真实模型做一次完整上传验收。
+- 部署前仍需在可用的 PostgreSQL / OSS 环境执行 `python -m scripts.contract.test_contract_demo_live --mock-review`，再用真实模型做一次完整上传验收。
 
 ## Demo 验证记录（2026-09-15）
 

@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
+import hashlib
+
+from products.contract.domain.document import ParsedDocument
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +25,17 @@ class VersionContent:
     parser_name: str
     parser_version: str = "v1"
     page_count: int | None = None
+
+    @classmethod
+    def from_parsed(cls, document: ParsedDocument) -> VersionContent:
+        return cls(
+            version_id=document.version_id,
+            document_text=document.document_text,
+            content_hash=hashlib.sha256(document.document_text.encode("utf-8")).hexdigest(),
+            parser_name=document.parser_name,
+            parser_version=document.parser_version,
+            page_count=document.page_count,
+        )
 
     @property
     def character_count(self) -> int:

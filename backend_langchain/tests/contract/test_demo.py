@@ -3,8 +3,8 @@ from io import BytesIO
 from types import SimpleNamespace
 from uuid import uuid4
 from zipfile import ZipFile
-from unittest.mock import patch, AsyncMock
-from infrastructure.document.contract_parser import validate_file, parse_contract
+from unittest.mock import ANY, AsyncMock, patch
+from products.contract.document.contract_parser import validate_file, parse_contract
 
 
 class _Transaction:
@@ -36,7 +36,7 @@ class ParserTests(unittest.TestCase):
         document.add_table(rows=1, cols=1).cell(0, 0).text = '金额：100 元'
         document.add_paragraph('期限：一年')
         stream = BytesIO(); document.save(stream)
-        text = parse_contract('test.docx', stream.getvalue())
+        text = parse_contract('test.docx', stream.getvalue()).document_text
         self.assertLess(text.index('采购合同'), text.index('金额'))
         self.assertLess(text.index('金额'), text.index('期限'))
 
@@ -63,7 +63,7 @@ class ParserTests(unittest.TestCase):
 
 class ReviewTests(unittest.IsolatedAsyncioTestCase):
     async def test_fabricated_evidence_is_rejected(self):
-        from products.contract.application.analysis import review_document
+        from products.contract.workflows.review_workflow import review_document
         from products.contract.schemas.analysis import ContractAnalysis, Risk
         result = ContractAnalysis(document_type='合同', summary='摘要', risks=[Risk(
             title='风险', risk_level='high', original_text='不存在的条款', reason='原因', suggestion='建议')])
@@ -71,14 +71,14 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
             await review_document('真实条款', AsyncMock(return_value=result))
 
     async def test_valid_evidence_is_accepted(self):
-        from products.contract.application.analysis import review_document
+        from products.contract.workflows.review_workflow import review_document
         from products.contract.schemas.analysis import ContractAnalysis, Risk
         result = ContractAnalysis(document_type='合同', summary='摘要', risks=[Risk(
             title='风险', risk_level='high', original_text='真实条款', reason='原因', suggestion='建议')])
         self.assertEqual(await review_document('真实 条款', AsyncMock(return_value=result)), result)
 
     async def test_clause_evidence_must_exist(self):
-        from products.contract.application.analysis import review_document
+        from products.contract.workflows.review_workflow import review_document
         from products.contract.schemas.analysis import Clause, ContractAnalysis
         result = ContractAnalysis(
             document_type='合同',
@@ -89,7 +89,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
             await review_document('真实合同条款', AsyncMock(return_value=result))
 
     async def test_risk_clause_sequence_must_reference_a_clause(self):
-        from products.contract.application.analysis import review_document
+        from products.contract.workflows.review_workflow import review_document
         from products.contract.schemas.analysis import Clause, ContractAnalysis, Risk
         result = ContractAnalysis(
             document_type='合同',
@@ -108,80 +108,93 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def test_cached_content_skips_parser_and_completes(self):
         from products.contract.domain.review import ReviewContext, VersionContent
         from products.contract.schemas.analysis import ContractAnalysis
-        from products.contract.workflows.review_workflow import ContractReviewWorkflow
+        from products.contract import db as contract_db
+        from products.contract.workflows.review_workflow import run_contract_review
 
         context = ReviewContext(uuid4(), uuid4(), 'key', 'contract.docx')
         content = VersionContent(context.version_id, '真实合同条款', 'hash', 'python-docx')
         result = ContractAnalysis(document_type='合同', summary='摘要')
-        store = SimpleNamespace(
-            claim_run=AsyncMock(return_value=context),
-            get_content=AsyncMock(return_value=content),
-            mark_parsing=AsyncMock(),
-            save_content=AsyncMock(),
-            mark_analyzing=AsyncMock(),
-            complete_run=AsyncMock(),
-            fail_run=AsyncMock(),
-        )
-        parser = SimpleNamespace(parse=AsyncMock())
+        claim = AsyncMock(return_value=context)
+        mark_parsing = AsyncMock()
+        mark_analyzing = AsyncMock()
+        complete = AsyncMock()
+        fail = AsyncMock()
+        pipeline = SimpleNamespace(ensure=AsyncMock(return_value=SimpleNamespace(document=content)))
         reviewer = SimpleNamespace(review=AsyncMock(return_value=result))
 
-        await ContractReviewWorkflow(_Session(), store, parser, reviewer).run(context.run_id)
+        with (
+            patch.object(contract_db, 'claim_run', claim),
+            patch.object(contract_db, 'mark_parsing', mark_parsing),
+            patch.object(contract_db, 'mark_analyzing', mark_analyzing),
+            patch.object(contract_db, 'complete_run', complete),
+            patch.object(contract_db, 'fail_run', fail),
+        ):
+            await run_contract_review(_Session(), pipeline, reviewer, context.run_id)
 
-        parser.parse.assert_not_awaited()
-        store.save_content.assert_not_awaited()
-        store.mark_analyzing.assert_awaited_once_with(context)
-        store.complete_run.assert_awaited_once_with(context, result)
-        store.fail_run.assert_not_awaited()
+        pipeline.ensure.assert_awaited_once_with(context)
+        mark_analyzing.assert_awaited_once_with(ANY, context)
+        complete.assert_awaited_once_with(ANY, context, result)
+        fail.assert_not_awaited()
 
     async def test_new_content_is_saved_before_review(self):
         from products.contract.domain.review import ReviewContext, VersionContent
         from products.contract.schemas.analysis import ContractAnalysis
-        from products.contract.workflows.review_workflow import ContractReviewWorkflow
+        from products.contract import db as contract_db
+        from products.contract.workflows.review_workflow import run_contract_review
 
         context = ReviewContext(uuid4(), uuid4(), 'key', 'contract.pdf')
         content = VersionContent(context.version_id, '合同文字', 'hash', 'pdfplumber')
-        store = SimpleNamespace(
-            claim_run=AsyncMock(return_value=context),
-            get_content=AsyncMock(return_value=None),
-            mark_parsing=AsyncMock(),
-            save_content=AsyncMock(),
-            mark_analyzing=AsyncMock(),
-            complete_run=AsyncMock(),
-            fail_run=AsyncMock(),
-        )
-        parser = SimpleNamespace(parse=AsyncMock(return_value=content))
+        from products.contract.domain.document import ParsedDocument
+        parsed = ParsedDocument(context.version_id, content.document_text, (), None, 'pdfplumber')
+        content = VersionContent.from_parsed(parsed)
+        pipeline = SimpleNamespace(ensure=AsyncMock(return_value=SimpleNamespace(document=parsed)))
         reviewer = SimpleNamespace(
             review=AsyncMock(return_value=ContractAnalysis(document_type='合同', summary='摘要'))
         )
+        claim = AsyncMock(return_value=context)
+        mark_parsing = AsyncMock()
+        mark_analyzing = AsyncMock()
+        complete = AsyncMock()
+        fail = AsyncMock()
 
-        await ContractReviewWorkflow(_Session(), store, parser, reviewer).run(context.run_id)
+        with (
+            patch.object(contract_db, 'claim_run', claim),
+            patch.object(contract_db, 'mark_parsing', mark_parsing),
+            patch.object(contract_db, 'mark_analyzing', mark_analyzing),
+            patch.object(contract_db, 'complete_run', complete),
+            patch.object(contract_db, 'fail_run', fail),
+        ):
+            await run_contract_review(_Session(), pipeline, reviewer, context.run_id)
 
-        parser.parse.assert_awaited_once_with(context)
-        store.mark_parsing.assert_awaited_once_with(context)
-        store.save_content.assert_awaited_once_with(content)
+        pipeline.ensure.assert_awaited_once_with(context)
+        mark_parsing.assert_awaited_once_with(ANY, context)
+        reviewer.review.assert_awaited_once_with(content.document_text)
 
     async def test_failure_is_persisted(self):
         from products.contract.domain.review import ReviewContext, VersionContent
-        from products.contract.workflows.review_workflow import ContractReviewWorkflow
+        from products.contract import db as contract_db
+        from products.contract.workflows.review_workflow import run_contract_review
 
         context = ReviewContext(uuid4(), uuid4(), 'key', 'contract.docx')
         content = VersionContent(context.version_id, '合同文字', 'hash', 'python-docx')
-        store = SimpleNamespace(
-            claim_run=AsyncMock(return_value=context),
-            get_content=AsyncMock(return_value=content),
-            mark_parsing=AsyncMock(),
-            save_content=AsyncMock(),
-            mark_analyzing=AsyncMock(),
-            complete_run=AsyncMock(),
-            fail_run=AsyncMock(),
-        )
-        parser = SimpleNamespace(parse=AsyncMock())
+        pipeline = SimpleNamespace(ensure=AsyncMock(return_value=SimpleNamespace(document=content)))
         reviewer = SimpleNamespace(review=AsyncMock(side_effect=RuntimeError('provider down')))
+        claim = AsyncMock(return_value=context)
+        complete = AsyncMock()
+        fail = AsyncMock()
 
-        await ContractReviewWorkflow(_Session(), store, parser, reviewer).run(context.run_id)
+        with (
+            patch.object(contract_db, 'claim_run', claim),
+            patch.object(contract_db, 'mark_parsing', AsyncMock()),
+            patch.object(contract_db, 'mark_analyzing', AsyncMock()),
+            patch.object(contract_db, 'complete_run', complete),
+            patch.object(contract_db, 'fail_run', fail),
+        ):
+            await run_contract_review(_Session(), pipeline, reviewer, context.run_id)
 
-        store.complete_run.assert_not_awaited()
-        store.fail_run.assert_awaited_once_with(
+        complete.assert_not_awaited()
+        fail.assert_awaited_once_with(
+            ANY,
             context.run_id,
             '分析服务暂不可用或超时，请稍后重新分析',
         )

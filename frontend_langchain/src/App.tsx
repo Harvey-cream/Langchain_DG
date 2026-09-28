@@ -1,10 +1,10 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import Login from './page/Langchain_login/Login';
-import Register from './page/Langchain_login/Register';
-import Home from './page/Home';
-import InterviewChatPage from './pages/interview/InterviewChatPage';
-import ContractRoutes from './app/routes/ContractRoutes';
+import Home from './app/HomePage';
+import Login from './common/auth/Login';
+import Register from './common/auth/Register';
+import ContractRoutes from './products/contract/routes';
+import InterviewChatPage from './products/interview/InterviewPage';
 
 const App: React.FC = () => {
   return (

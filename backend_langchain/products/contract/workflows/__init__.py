@@ -1,3 +1,3 @@
-from .review_workflow import ContractReviewWorkflow
+from .review_workflow import run_contract_review
 
-__all__ = ["ContractReviewWorkflow"]
+__all__ = ["run_contract_review"]

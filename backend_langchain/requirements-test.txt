@@ -1,0 +1,3 @@
+# Additional dependency for transaction/constraint tests on disposable SQLite databases.
+aiosqlite>=0.20,<1
+pytest>=8,<10

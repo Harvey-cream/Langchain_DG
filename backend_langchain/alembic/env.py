@@ -7,34 +7,19 @@ from alembic import context
 from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 
-from app.settings import DATABASE_URL
-from infrastructure.db.base import Base
+from common.settings import DATABASE_URL
+from common.database import Base
 
 # Register every table in the shared metadata. Autogenerate is filtered to Contract.
-import app.models  # noqa: F401,E402
-import infrastructure.db.models.analysis  # noqa: F401,E402
-import infrastructure.db.models.contract  # noqa: F401,E402
-import infrastructure.db.models.customer  # noqa: F401,E402
-import infrastructure.db.models.review  # noqa: F401,E402
-import infrastructure.db.models.version  # noqa: F401,E402
+import common.account.models  # noqa: F401,E402
+import products.interview.models  # noqa: F401,E402
+from products.contract.models import CONTRACT_TABLE_NAMES
 
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-CONTRACT_TABLE_NAMES = frozenset(
-    {
-        "contract_customers",
-        "contracts",
-        "contract_versions",
-        "contract_version_contents",
-        "contract_analysis_runs",
-        "contract_clauses",
-        "contract_risks",
-        "contract_review_selections",
-    }
-)
 target_metadata = Base.metadata
 
 

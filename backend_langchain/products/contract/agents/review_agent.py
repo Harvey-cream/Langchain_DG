@@ -1,5 +1,5 @@
 from langchain_core.messages import HumanMessage, SystemMessage
-from config.config import get_qwen_chat_model
+from common.config.config import get_qwen_chat_model
 from products.contract.schemas.analysis import ContractAnalysis
 import json
 

@@ -1,7 +1,11 @@
 # ADR 0004: Agent Runtime Boundary
 
 ## Decision
-LangGraph is an execution implementation behind the Platform Agent Runtime. The repository package is named `agent_platform` rather than `platform` because Python's standard library already owns the top-level `platform` module. Product Domain does not import LangGraph. Product workflows depend on runtime ports or adapters rather than graph implementation details.
+LangGraph currently serves only the Interview product, so its runtime lives in
+`products/interview/agent`. Contract domain code does not import LangGraph.
+The runtime should move to `common` only after a second product has a concrete,
+compatible use for it.
 
 ## Consequences
-Agent runtime can evolve independently from Contract business rules.
+Interview runtime can evolve independently from Contract business rules without
+maintaining an unused generic `agent_platform` abstraction.

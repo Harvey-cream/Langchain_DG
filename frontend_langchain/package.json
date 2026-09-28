@@ -7,7 +7,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "format:contract": "prettier --write src/pages/contract src/features/contract tests/contract.spec.ts playwright.config.ts",
+    "format:contract": "prettier --write src/products/contract tests/contract.spec.ts playwright.config.ts",
     "test:contract": "playwright test",
     "dev": "vite",
     "build": "tsc && vite build",

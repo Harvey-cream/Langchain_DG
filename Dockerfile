@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend_langchain/requirements.txt /app/requirements.txt
-# 统一 requirements.txt（含建库依赖）；容器内可直接 python Scripts/build_rag_knowledge.py
+# 统一 requirements.txt（含建库依赖）；容器内可直接 python scripts/interview/build_rag_knowledge.py
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip setuptools wheel \
     && pip install -r /app/requirements.txt

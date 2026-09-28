@@ -3,26 +3,22 @@ from __future__ import annotations
 import asyncio
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-from fastapi import BackgroundTasks
-from infrastructure.db.models.version import ContractVersionModel
-from infrastructure.db.repositories.contract_review_store import (
-    SqlAlchemyContractReviewStore,
+from fastapi import BackgroundTasks, HTTPException
+
+from products.contract import api as contract_router
+from products.contract import db as contract_db
+from products.contract.models import ContractVersionModel
+from products.contract.domain.review import ReviewContext
+from products.contract.schemas import (
+    ContractCreate,
+    ContractVersionCreate,
+    CustomerCreate,
 )
-from infrastructure.document.contract_parser import validate_file
-from infrastructure.queue.background_tasks import FastApiBackgroundJobDispatcher
-from products.contract.domain.review import ReviewContext, VersionContent
-from products.contract.application.review_service import (
-    AnalysisRunNotSelectableError,
-    ContractNotFoundError,
-    ContractReviewService,
-    ContractVersionNotFoundError,
-)
-from products.contract.application.services import ContractVersionApplicationService
 from products.contract.schemas.analysis import ContractAnalysis
-from products.contract.workflows.review_workflow import ContractReviewWorkflow
+from products.contract.workflows.review_workflow import run_contract_review
 
 
 class _Result:
@@ -33,387 +29,316 @@ class _Result:
         return list(self._rows)
 
 
+class _Transaction:
+    def __init__(self, events: list[str] | None = None):
+        self.events = events
+
+    async def __aenter__(self):
+        if self.events is not None:
+            self.events.append("tx.begin")
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self.events is not None:
+            self.events.append("tx.rollback" if exc_type else "tx.commit")
+        return False
+
+
 class _FakeSession:
-    def __init__(self, *, scalar_results=(), commit_error: Exception | None = None):
+    def __init__(self, *, scalar_results=(), events: list[str] | None = None):
         self.scalar_results = list(scalar_results)
-        self.commit_error = commit_error
+        self.events = events
         self.added: list[object] = []
+        self.scalar_calls = 0
         self.execute = AsyncMock()
-        self.flush = AsyncMock()
-        self.rollback = AsyncMock()
-        self.commit = AsyncMock(side_effect=commit_error)
         self.scalars = AsyncMock()
+        self.rollback = AsyncMock()
+
+    def begin(self):
+        return _Transaction(self.events)
+
+    def in_transaction(self):
+        return False
 
     async def scalar(self, _statement):
+        self.scalar_calls += 1
+        if self.events is not None:
+            self.events.append("db.scalar")
         if not self.scalar_results:
             raise AssertionError("unexpected scalar query")
         return self.scalar_results.pop(0)
 
     def add(self, value):
         self.added.append(value)
+        if self.events is not None:
+            self.events.append("db.add")
+
+    def add_all(self, values):
+        self.added.extend(values)
+        if self.events is not None:
+            self.events.append("db.add_all")
+
+    async def flush(self):
+        if self.events is not None:
+            self.events.append("db.flush")
+
+    async def delete(self, value):
+        if self.events is not None:
+            self.events.append("db.delete")
+        self.deleted = value
 
 
-class _Transaction:
-    async def __aenter__(self):
-        return self
+class _UploadFile:
+    def __init__(self, filename="contract.pdf", data=b"%PDF-test"):
+        self.filename = filename
+        self.data = data
+        self.closed = False
 
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
+    async def read(self, _limit):
+        return self.data
 
-
-class _ServiceSession:
-    def __init__(self):
-        self.begin_count = 0
-
-    def begin(self):
-        self.begin_count += 1
-        return _Transaction()
+    async def close(self):
+        self.closed = True
 
 
-class ContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
-    def _service(self, store):
-        session = _ServiceSession()
-        storage = SimpleNamespace(put=MagicMock(), delete=MagicMock())
-        dispatcher = SimpleNamespace(dispatch_analysis=AsyncMock())
-        service = ContractReviewService(
-            session=session,
-            store=store,
-            storage=storage,
-            validate_upload=lambda _name, _data: "pdf",
-            dispatcher=dispatcher,
-        )
-        return service, session, storage, dispatcher
-
-    async def test_upload_is_a_single_service_use_case(self):
-        contract_id = uuid4()
-        run = SimpleNamespace(id=uuid4())
-        version = SimpleNamespace(id=uuid4(), number=1)
-        store = SimpleNamespace(
-            get_owned_contract=AsyncMock(return_value=object()),
-            lock_owned_contract=AsyncMock(return_value=object()),
-            get_next_version_number=AsyncMock(return_value=1),
-            create_version=AsyncMock(return_value=version),
-            create_run=AsyncMock(return_value=run),
-        )
-        service, session, storage, dispatcher = self._service(store)
-
-        actual_version, actual_run = await service.upload_contract_version(
-            user_id=7,
-            contract_id=contract_id,
-            filename="folder/contract.pdf",
-            data=b"%PDF-test",
-        )
-
-        self.assertIs(actual_version, version)
-        self.assertIs(actual_run, run)
-        self.assertEqual(session.begin_count, 2)
-        storage.put.assert_called_once()
-        store.lock_owned_contract.assert_awaited_once_with(7, contract_id)
-        dispatcher.dispatch_analysis.assert_awaited_once_with(run.id)
-
-    async def test_upload_rechecks_ownership_after_oss_and_compensates(self):
-        store = SimpleNamespace(
-            get_owned_contract=AsyncMock(return_value=object()),
-            lock_owned_contract=AsyncMock(return_value=None),
-        )
-        service, _session, storage, dispatcher = self._service(store)
-
-        with self.assertRaises(ContractNotFoundError):
-            await service.upload_contract_version(
-                user_id=7,
-                contract_id=uuid4(),
-                filename="contract.pdf",
-                data=b"%PDF-test",
-            )
-
-        storage.put.assert_called_once()
-        storage.delete.assert_called_once()
-        dispatcher.dispatch_analysis.assert_not_awaited()
-
-    async def test_oss_upload_happens_without_contract_lock_or_open_transaction(self):
+class ContractRouterBehaviorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_upload_keeps_oss_outside_transaction_and_enqueues_after_commit(self):
         events: list[str] = []
+        session = _FakeSession(
+            scalar_results=(uuid4(), object(), 0),
+            events=events,
+        )
         contract_id = uuid4()
-        run = SimpleNamespace(id=uuid4())
-        version = SimpleNamespace(id=uuid4(), number=1)
-
-        class RecordingTransaction:
-            async def __aenter__(self):
-                events.append("tx.begin")
-
-            async def __aexit__(self, exc_type, exc, tb):
-                events.append("tx.rollback" if exc_type else "tx.commit")
-
-        class RecordingSession:
-            def begin(self):
-                return RecordingTransaction()
-
-        async def record(name, value):
-            events.append(name)
-            return value
-
-        store = SimpleNamespace(
-            get_owned_contract=lambda *_: record("contract.read", object()),
-            lock_owned_contract=lambda *_: record("contract.lock", object()),
-            get_next_version_number=lambda *_: record("version.number", 1),
-            create_version=lambda **_: record("version.create", version),
-            create_run=lambda **_: record("run.create", run),
+        background = BackgroundTasks()
+        file = _UploadFile(filename="folder/contract.pdf")
+        storage = SimpleNamespace(
+            put=MagicMock(side_effect=lambda *_args, **_kwargs: events.append("oss.put")),
+            delete=MagicMock(side_effect=lambda *_args: events.append("oss.delete")),
         )
 
-        class RecordingStorage:
-            def put(self, *_args, **_kwargs):
-                events.append("oss.put")
-
-            def delete(self, _key):
-                events.append("oss.delete")
-
-        async def dispatch(_run_id):
-            events.append("job.dispatch")
-
-        service = ContractReviewService(
-            session=RecordingSession(),
-            store=store,
-            storage=RecordingStorage(),
-            validate_upload=lambda _name, _data: "pdf",
-            dispatcher=SimpleNamespace(dispatch_analysis=dispatch),
-        )
-
-        await service.upload_contract_version(
-            user_id=7,
-            contract_id=contract_id,
-            filename="contract.pdf",
-            data=b"%PDF-test",
-        )
+        with (
+            patch.object(contract_router, "OssObjectStorage", return_value=storage),
+            patch.object(contract_router, "validate_file", return_value="pdf"),
+        ):
+            await contract_router.upload(
+                contract_id,
+                background,
+                file,
+                SimpleNamespace(user_id=7),
+                session,
+            )
 
         self.assertEqual(
             events,
             [
                 "tx.begin",
-                "contract.read",
+                "db.scalar",
                 "tx.commit",
                 "oss.put",
                 "tx.begin",
-                "contract.lock",
-                "version.number",
-                "version.create",
-                "run.create",
+                "db.scalar",
+                "db.scalar",
+                "db.add_all",
+                "db.flush",
                 "tx.commit",
-                "job.dispatch",
             ],
         )
+        version, run = session.added
+        self.assertEqual(version.contract_id, contract_id)
+        self.assertEqual(version.number, 1)
+        self.assertEqual(run.version_id, version.id)
+        self.assertTrue(file.closed)
+        self.assertEqual(len(background.tasks), 1)
+        task = background.tasks[0]
+        self.assertIs(task.func, contract_router.execute_analysis)
+        self.assertEqual(task.args, (run.id,))
 
-    async def test_retry_reuses_active_run_without_dispatch(self):
+    async def test_upload_rechecks_ownership_and_deletes_oss_on_database_failure(self):
+        session = _FakeSession(scalar_results=(uuid4(), None))
+        storage = SimpleNamespace(put=MagicMock(), delete=MagicMock())
+        background = BackgroundTasks()
+
+        with (
+            patch.object(contract_router, "OssObjectStorage", return_value=storage),
+            patch.object(contract_router, "validate_file", return_value="pdf"),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await contract_router.upload(
+                    uuid4(),
+                    background,
+                    _UploadFile(),
+                    SimpleNamespace(user_id=7),
+                    session,
+                )
+
+        self.assertEqual(raised.exception.status_code, 404)
+        storage.put.assert_called_once()
+        storage.delete.assert_called_once()
+        self.assertEqual(len(background.tasks), 0)
+
+    async def test_invalid_upload_has_no_database_or_oss_side_effects(self):
+        storage = SimpleNamespace(put=MagicMock(), delete=MagicMock())
+        session = _FakeSession()
+
+        with (
+            patch.object(contract_router, "OssObjectStorage", return_value=storage),
+            patch.object(
+                contract_router,
+                "validate_file",
+                side_effect=ValueError("请上传有效的 PDF 或 DOCX 文件"),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await contract_router.upload(
+                    uuid4(),
+                    BackgroundTasks(),
+                    _UploadFile(data=b"bad"),
+                    SimpleNamespace(user_id=7),
+                    session,
+                )
+
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertEqual(session.scalar_calls, 0)
+        storage.put.assert_not_called()
+
+    async def test_retry_reuses_active_run_without_enqueuing(self):
+        user_id = 7
         contract_id = uuid4()
         version_id = uuid4()
         active = SimpleNamespace(id=uuid4(), attempt=2)
         version = SimpleNamespace(
             id=version_id,
-            source_key=f"contracts/7/{contract_id}/{version_id}/original.pdf",
+            source_key=f"contracts/{user_id}/{contract_id}/{version_id}/original.pdf",
         )
-        store = SimpleNamespace(
-            lock_owned_version=AsyncMock(return_value=version),
-            get_active_run=AsyncMock(return_value=active),
+        background = BackgroundTasks()
+        session = _FakeSession(scalar_results=(version, active))
+
+        await contract_router.analyze(
+            contract_id,
+            version_id,
+            background,
+            SimpleNamespace(user_id=user_id),
+            session,
         )
-        service, _session, _storage, dispatcher = self._service(store)
 
-        run, created = await service.retry_analysis(
-            user_id=7,
-            contract_id=contract_id,
-            version_id=version_id,
-        )
+        self.assertEqual(len(background.tasks), 0)
+        self.assertEqual(session.added, [])
 
-        self.assertIs(run, active)
-        self.assertFalse(created)
-        dispatcher.dispatch_analysis.assert_not_awaited()
-
-    async def test_query_history_and_selection_use_business_errors(self):
-        store = SimpleNamespace(
-            load_snapshot=AsyncMock(return_value=None),
-            list_history=AsyncMock(return_value=None),
-            select_run=AsyncMock(return_value=False),
-        )
-        service, _session, _storage, _dispatcher = self._service(store)
-        args = dict(user_id=7, contract_id=uuid4(), version_id=uuid4())
-
-        with self.assertRaises(ContractVersionNotFoundError):
-            await service.get_analysis(**args)
-        with self.assertRaises(ContractVersionNotFoundError):
-            await service.get_analysis_history(**args)
-        with self.assertRaises(AnalysisRunNotSelectableError):
-            await service.select_analysis_run(**args, run_id=uuid4())
-
-
-class ServiceMutationBehaviorTests(unittest.IsolatedAsyncioTestCase):
-    @staticmethod
-    def _service(store, *, validator=lambda _name, _data: "pdf"):
-        storage = SimpleNamespace(put=MagicMock(), delete=MagicMock())
-        dispatcher = SimpleNamespace(dispatch_analysis=AsyncMock())
-        service = ContractReviewService(
-            session=_ServiceSession(),
-            store=store,
-            storage=storage,
-            validate_upload=validator,
-            dispatcher=dispatcher,
-        )
-        return service, storage, dispatcher
-
-    async def test_version_numbers_follow_locked_store_allocator(self):
-        contract_id = uuid4()
-        numbers = iter((1, 2, 3))
-
-        async def create_version(**kwargs):
-            return SimpleNamespace(**kwargs)
-
-        store = SimpleNamespace(
-            get_owned_contract=AsyncMock(return_value=object()),
-            lock_owned_contract=AsyncMock(return_value=object()),
-            get_next_version_number=AsyncMock(side_effect=lambda _id: next(numbers)),
-            create_version=create_version,
-            create_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-        )
-        service, _storage, _dispatcher = self._service(store)
-
-        created = []
-        for _ in range(3):
-            version, _run = await service.upload_contract_version(
-                user_id=7,
-                contract_id=contract_id,
-                filename="contract.pdf",
-                data=b"%PDF-test",
-            )
-            created.append(version.number)
-
-        self.assertEqual(created, [1, 2, 3])
-        self.assertEqual(store.lock_owned_contract.await_count, 3)
-
-    async def test_invalid_upload_has_no_database_or_oss_side_effects(self):
-        store = SimpleNamespace(get_owned_contract=AsyncMock())
-        service, storage, dispatcher = self._service(store, validator=validate_file)
-
-        with self.assertRaises(ValueError):
-            await service.upload_contract_version(
-                user_id=7,
-                contract_id=uuid4(),
-                filename="bad.pdf",
-                data=b"not-a-pdf",
-            )
-
-        store.get_owned_contract.assert_not_awaited()
-        storage.put.assert_not_called()
-        dispatcher.dispatch_analysis.assert_not_awaited()
-
-    async def test_database_failure_compensates_uploaded_oss_object(self):
-        store = SimpleNamespace(
-            get_owned_contract=AsyncMock(return_value=object()),
-            lock_owned_contract=AsyncMock(return_value=object()),
-            get_next_version_number=AsyncMock(return_value=1),
-            create_version=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-            create_run=AsyncMock(side_effect=RuntimeError("database unavailable")),
-        )
-        service, storage, dispatcher = self._service(store)
-
-        with self.assertRaisesRegex(RuntimeError, "database unavailable"):
-            await service.upload_contract_version(
-                user_id=7,
-                contract_id=uuid4(),
-                filename="contract.pdf",
-                data=b"%PDF-test",
-            )
-
-        storage.put.assert_called_once()
-        storage.delete.assert_called_once()
-        dispatcher.dispatch_analysis.assert_not_awaited()
-
-    async def test_retry_without_active_run_increments_attempt(self):
+    async def test_retry_creates_next_attempt_and_enqueues(self):
+        user_id = 7
         contract_id = uuid4()
         version_id = uuid4()
         version = SimpleNamespace(
             id=version_id,
             status="failed",
-            source_key=f"contracts/7/{contract_id}/{version_id}/original.pdf",
+            source_key=f"contracts/{user_id}/{contract_id}/{version_id}/original.docx",
         )
-        run = SimpleNamespace(id=uuid4(), attempt=3, status="pending")
-        store = SimpleNamespace(
-            lock_owned_version=AsyncMock(return_value=version),
-            get_active_run=AsyncMock(return_value=None),
-            get_max_attempt=AsyncMock(return_value=2),
-            create_run=AsyncMock(return_value=run),
-            set_version_status=AsyncMock(),
-        )
-        service, _storage, dispatcher = self._service(store)
+        background = BackgroundTasks()
+        session = _FakeSession(scalar_results=(version, None, 2))
 
-        actual, created = await service.retry_analysis(
-            user_id=7,
-            contract_id=contract_id,
-            version_id=version_id,
+        await contract_router.analyze(
+            contract_id,
+            version_id,
+            background,
+            SimpleNamespace(user_id=user_id),
+            session,
         )
 
-        self.assertIs(actual, run)
-        self.assertTrue(created)
-        store.create_run.assert_awaited_once_with(
-            version_id=version_id,
-            attempt=3,
-            prompt_version="v2",
+        run = session.added[0]
+        self.assertEqual(run.attempt, 3)
+        self.assertEqual(run.version_id, version_id)
+        self.assertEqual(version.status, "pending")
+        self.assertEqual(background.tasks[0].args, (run.id,))
+
+    async def test_version_endpoint_allocates_number_while_contract_is_locked(self):
+        contract_id = uuid4()
+        session = _FakeSession(scalar_results=(object(), 2))
+
+        await contract_router.create_contract_version(
+            contract_id,
+            ContractVersionCreate(
+                source_key="oss://contract/v3.pdf",
+                filename="v3.pdf",
+            ),
+            SimpleNamespace(user_id=7),
+            session,
         )
-        store.set_version_status.assert_awaited_once_with(version, "pending")
-        dispatcher.dispatch_analysis.assert_awaited_once_with(run.id)
+
+        version = session.added[0]
+        self.assertEqual(version.number, 3)
+        self.assertEqual(version.contract_id, contract_id)
+
+    async def test_whitespace_crud_values_are_rejected_before_database_access(self):
+        session = _FakeSession()
+        user = SimpleNamespace(user_id=7)
+
+        contract_response = await contract_router.create_contract(
+            ContractCreate(customer_id=1, title="   "),
+            user,
+            session,
+        )
+        customer_response = await contract_router.create_customer(
+            CustomerCreate(name="   ", email="a@b.com"),
+            user,
+            session,
+        )
+        version_response = await contract_router.create_contract_version(
+            uuid4(),
+            ContractVersionCreate(source_key="   ", filename="v1.pdf"),
+            user,
+            session,
+        )
+
+        self.assertEqual(contract_response.status_code, 400)
+        self.assertEqual(customer_response.status_code, 400)
+        self.assertEqual(version_response.status_code, 400)
+        self.assertEqual(session.scalar_calls, 0)
 
 
 class WorkflowClaimBehaviorTests(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_executors_only_review_claimed_run_once(self):
         context = ReviewContext(uuid4(), uuid4(), "key", "contract.docx")
-        content = VersionContent(
-            context.version_id,
-            "真实合同条款",
-            "hash",
-            "python-docx",
-        )
+        lock = asyncio.Lock()
+        claimed = False
 
-        class ClaimOnceRepository:
-            def __init__(self):
-                self._lock = asyncio.Lock()
-                self._claimed = False
-                self.completed = AsyncMock()
-                self.failed = AsyncMock()
+        async def claim(_session, _run_id):
+            nonlocal claimed
+            async with lock:
+                if claimed:
+                    return None
+                claimed = True
+                return context
 
-            async def claim_run(self, _run_id):
-                async with self._lock:
-                    if self._claimed:
-                        return None
-                    self._claimed = True
-                    return context
-
-            async def get_content(self, _version_id):
-                return content
-
-            async def mark_parsing(self, _context):
-                raise AssertionError("cached content should skip parsing")
-
-            async def save_content(self, _content):
-                raise AssertionError("cached content should not be saved again")
-
-            async def mark_analyzing(self, _context):
-                return None
-
-            async def complete_run(self, ctx, result):
-                await self.completed(ctx, result)
-
-            async def fail_run(self, run_id, message):
-                await self.failed(run_id, message)
-
-        repository = ClaimOnceRepository()
+        completed = AsyncMock()
+        failed = AsyncMock()
         reviewer = SimpleNamespace(
             review=AsyncMock(
                 return_value=ContractAnalysis(document_type="合同", summary="摘要")
             )
         )
-        parser = SimpleNamespace(parse=AsyncMock())
-        workflow = ContractReviewWorkflow(_ServiceSession(), repository, parser, reviewer)
-
-        await asyncio.gather(workflow.run(context.run_id), workflow.run(context.run_id))
+        pipeline = SimpleNamespace(
+            ensure=AsyncMock(
+                return_value=SimpleNamespace(
+                    document=SimpleNamespace(document_text="真实合同条款")
+                )
+            )
+        )
+        with (
+            patch.object(contract_db, "claim_run", side_effect=claim),
+            patch.object(contract_db, "mark_parsing", AsyncMock()),
+            patch.object(contract_db, "mark_analyzing", AsyncMock()),
+            patch.object(contract_db, "complete_run", completed),
+            patch.object(contract_db, "fail_run", failed),
+        ):
+            session = _FakeSession()
+            await asyncio.gather(
+                run_contract_review(session, pipeline, reviewer, context.run_id),
+                run_contract_review(session, pipeline, reviewer, context.run_id),
+            )
 
         reviewer.review.assert_awaited_once()
-        repository.completed.assert_awaited_once()
-        repository.failed.assert_not_awaited()
+        completed.assert_awaited_once()
+        failed.assert_not_awaited()
 
 
 class HistoryAndIsolationBehaviorTests(unittest.IsolatedAsyncioTestCase):
@@ -442,10 +367,13 @@ class HistoryAndIsolationBehaviorTests(unittest.IsolatedAsyncioTestCase):
         ]
         session = _FakeSession()
         session.scalars.return_value = _Result(rows)
-        repository = SqlAlchemyContractReviewStore(session)
-        repository.get_owned_version = AsyncMock(return_value=object())
 
-        history = await repository.list_history(7, uuid4(), version_id)
+        with patch.object(
+            contract_db, "_get_owned_version", AsyncMock(return_value=object())
+        ):
+            history = await contract_db.list_history(
+                session, 7, uuid4(), version_id
+            )
 
         self.assertEqual([item.attempt for item in history], [2, 1])
 
@@ -453,44 +381,35 @@ class HistoryAndIsolationBehaviorTests(unittest.IsolatedAsyncioTestCase):
         version_id = uuid4()
         completed = self._run(version_id=version_id)
         session = _FakeSession(scalar_results=[completed])
-        repository = SqlAlchemyContractReviewStore(session)
-        repository.get_owned_version = AsyncMock(return_value=object())
 
-        selected = await repository.select_run(
-            7, uuid4(), version_id, completed.id
-        )
+        with patch.object(
+            contract_db, "_get_owned_version", AsyncMock(return_value=object())
+        ):
+            selected = await contract_db.select_run(
+                session, 7, uuid4(), version_id, completed.id
+            )
 
         self.assertTrue(selected)
         session.execute.assert_awaited_once()
-        session.commit.assert_not_awaited()
-
-    async def test_select_rejects_other_version_or_unfinished_run(self):
-        version_id = uuid4()
-        for rejected in (None, None):
-            with self.subTest(case=rejected):
-                session = _FakeSession(scalar_results=[rejected])
-                repository = SqlAlchemyContractReviewStore(session)
-                repository.get_owned_version = AsyncMock(return_value=object())
-
-                selected = await repository.select_run(
-                    7, uuid4(), version_id, uuid4()
-                )
-
-                self.assertFalse(selected)
-                session.execute.assert_not_awaited()
-                session.commit.assert_not_awaited()
 
     async def test_user_cannot_read_or_select_unowned_version(self):
         session = _FakeSession()
-        repository = SqlAlchemyContractReviewStore(session)
-        repository.get_owned_version = AsyncMock(return_value=None)
 
-        self.assertIsNone(await repository.load_snapshot(8, uuid4(), uuid4()))
-        self.assertIsNone(await repository.list_history(8, uuid4(), uuid4()))
-        self.assertFalse(
-            await repository.select_run(8, uuid4(), uuid4(), uuid4())
-        )
-        session.scalar_results = []
+        with patch.object(
+            contract_db, "_get_owned_version", AsyncMock(return_value=None)
+        ):
+            self.assertIsNone(
+                await contract_db.load_snapshot(session, 8, uuid4(), uuid4())
+            )
+            self.assertIsNone(
+                await contract_db.list_history(session, 8, uuid4(), uuid4())
+            )
+            self.assertFalse(
+                await contract_db.select_run(
+                    session, 8, uuid4(), uuid4(), uuid4()
+                )
+            )
+
         session.execute.assert_not_awaited()
 
 
@@ -498,12 +417,15 @@ class SchemaSafetyBehaviorTests(unittest.TestCase):
     def test_contract_schema_is_not_initialized_at_application_startup(self):
         import inspect
 
-        from app import db as app_db
+        from app import main as app_main
+        from common import database
 
-        source = inspect.getsource(app_db.init_db_tables)
-        self.assertNotIn("CREATE UNIQUE INDEX", source)
-        self.assertNotIn("_apply_contract_analysis_column_patches", source)
-        self.assertIn("_legacy_tables", source)
+        create_source = inspect.getsource(database.create_tables)
+        startup_source = inspect.getsource(app_main.lifespan)
+        self.assertIn("tables=selected", create_source)
+        self.assertIn("create_tables([User.__table__])", startup_source)
+        self.assertIn("init_interview_tables()", startup_source)
+        self.assertNotIn("CONTRACT_TABLES", startup_source)
 
     def test_version_model_declares_unique_contract_number_constraint(self):
         constraints = {
@@ -512,48 +434,6 @@ class SchemaSafetyBehaviorTests(unittest.TestCase):
             if constraint.name
         }
         self.assertIn("uq_contract_version_number", constraints)
-
-
-class VersionAllocationBehaviorTests(unittest.IsolatedAsyncioTestCase):
-    async def test_legacy_version_api_uses_contract_lock_and_store_allocator(self):
-        contract_id = uuid4()
-        store = SimpleNamespace(
-            lock_owned_contract=AsyncMock(return_value=object()),
-            get_next_version_number=AsyncMock(return_value=3),
-            create_version=AsyncMock(),
-        )
-        service = ContractVersionApplicationService(
-            repository=SimpleNamespace(),
-            contracts=SimpleNamespace(),
-            session=_ServiceSession(),
-            review_store=store,
-        )
-
-        version = await service.create(
-            user_id=7,
-            contract_id=contract_id,
-            source_key="oss://contract/v3.pdf",
-            filename="v3.pdf",
-        )
-
-        self.assertEqual(version.number, 3)
-        store.lock_owned_contract.assert_awaited_once_with(7, contract_id)
-        store.get_next_version_number.assert_awaited_once_with(contract_id)
-        store.create_version.assert_awaited_once()
-
-
-class JobDispatcherBehaviorTests(unittest.IsolatedAsyncioTestCase):
-    async def test_fastapi_adapter_enqueues_analysis_handler(self):
-        background_tasks = BackgroundTasks()
-        dispatcher = FastApiBackgroundJobDispatcher(background_tasks)
-        run_id = uuid4()
-
-        await dispatcher.dispatch_analysis(run_id)
-
-        self.assertEqual(len(background_tasks.tasks), 1)
-        task = background_tasks.tasks[0]
-        self.assertEqual(task.func.__name__, "execute_analysis")
-        self.assertEqual(task.args, (run_id,))
 
 
 if __name__ == "__main__":

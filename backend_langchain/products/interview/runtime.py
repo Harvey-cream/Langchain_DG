@@ -9,12 +9,12 @@ from typing import Any
 
 from langgraph.graph.state import CompiledStateGraph
 
-from infrastructure.memory.memory_persist import MemoryTurnContext
-from runtime.execution.graph_factory import build_agent_graph
-from runtime.streaming.stream import stream_graph_chat_model_events
+from products.interview.memory.memory_persist import MemoryTurnContext
+from products.interview.pdf.schema_tools import get_builtin_pdf_tools
+from products.interview.agent.execution.graph_factory import build_agent_graph
+from products.interview.agent.streaming.stream import stream_graph_chat_model_events
 from products.interview.prompts import INTERVIEW_SYSTEM_PREFIX
 from products.interview.skills import INTERVIEW_SKILLS
-from products.interview.tools import get_interview_tools
 
 _interview: CompiledStateGraph | None = None
 
@@ -30,7 +30,7 @@ def get_stream_interview_executor(*, temperature: float = 0.45) -> CompiledState
     global _interview
     if _interview is None:
         _interview = build_agent_graph(
-            tools=get_interview_tools(),
+            tools=get_builtin_pdf_tools(),
             system_prompt=INTERVIEW_SYSTEM_PREFIX,
             recall_mode="interview",
             skills=INTERVIEW_SKILLS,

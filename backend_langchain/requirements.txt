@@ -1,6 +1,6 @@
 # 生产 / Docker / 建库统一依赖（向量走 DashScope，不装 torch）。
 # 存储统一 PostgreSQL：业务库(asyncpg) + 向量库(pgvector) + LangGraph checkpoint(psycopg)。
-# 验证：APP_ENV=production python Scripts/verify_prod_imports.py
+# 验证：APP_ENV=production python scripts/common/verify_prod_imports.py
 # 本地 HuggingFace 嵌入（无 DASHSCOPE_API_KEY 时）另装 CPU 版 torch。
 
 fastapi>=0.115.0,<1.0

@@ -16,6 +16,11 @@ frontend_langchain/coverage/
 frontend_langchain/playwright-report/
 frontend_langchain/test-results/
 
+# Local source snapshots and generated E2E uploads
+/backend_langchain/alembic.zip
+/frontend_langchain/src.zip
+/backend_langchain/tmp/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -66,6 +71,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# 防止 Windows 环境变量未展开时把个人 Codex 目录误建到仓库根目录
+/%USERPROFILE%/
+
 # Django
 *.log
 local_settings.py
@@ -100,6 +108,13 @@ backend_langchain/env/settings_debug.yaml
 # MCP 服务端密钥（从 mcp_servers.example.json 复制并填写）
 backend_langchain/config/mcp_servers.json
 backend_langchain/agent/mcp/mcp_servers.json
+/backend_langchain/common/integrations/mcp/mcp_servers.json
+
+# 本地 JWT 签名私钥（部署时单独上传，公钥可以提交）
+/backend_langchain/common/auth/private_key.pem
+
+# Claude Code 本机权限配置
+/.claude/settings.local.json
 
 # Chroma 旧目录（已迁 pgvector，若本地仍有残留目录勿提交）
 backend_langchain/knowledge/chroma/
@@ -113,10 +128,10 @@ backend_langchain/knowledge/chroma_db/
 *.db
 
 # 清洗/切块预览与基准输出（脚本生成，勿提交）
-backend_langchain/app/data/runtime/clean_chunk_preview/
-backend_langchain/app/data/runtime/cleanup_benchmark.json
+backend_langchain/products/interview/data/runtime/clean_chunk_preview/
+backend_langchain/products/interview/data/runtime/cleanup_benchmark.json
 
 # PDF 导出落盘与本地字体缓存（运行时生成）
 backend_langchain/media/
-backend_langchain/app/data/runtime/pdf_exports/
-backend_langchain/app/data/runtime/pdf_fonts/
+backend_langchain/products/interview/data/runtime/pdf_exports/
+backend_langchain/products/interview/data/runtime/pdf_fonts/
