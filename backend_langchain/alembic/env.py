@@ -33,6 +33,9 @@ def _sync_url(url: str) -> str:
 
 
 def _include_object(obj, name, type_, reflected, compare_to) -> bool:
+    if (type_ == 'index' and name == 'ix_contract_knowledge_embedding'
+            and context.get_context().dialect.name != 'postgresql'):
+        return False
     if type_ == "table":
         return name in CONTRACT_TABLE_NAMES
     table = getattr(obj, "table", None)

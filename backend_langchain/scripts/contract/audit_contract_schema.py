@@ -1,4 +1,5 @@
 """Read-only Contract Schema and data audit used before Alembic stamping."""
+
 from __future__ import annotations
 
 import argparse
@@ -15,46 +16,198 @@ if str(BACKEND_ROOT) not in sys.path:
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
+from pgvector.sqlalchemy import (
+    Vector,
+)  # noqa: F401; register PostgreSQL reflection type
 
 from common.settings import DATABASE_URL
 
-
 BASELINE_REVISION = "0001_contract_review_baseline"
-HEAD_REVISION = "0005_document_facts"
+HEAD_REVISION = "0008_contract_knowledge"
 REQUIRED_COLUMNS: dict[str, set[str]] = {
-    "contract_customers": {"id", "user_id", "name", "email", "created_at", "updated_at"},
+    "contract_customers": {
+        "id",
+        "user_id",
+        "name",
+        "email",
+        "created_at",
+        "updated_at",
+    },
     "contracts": {"id", "user_id", "customer_id", "title", "created_at", "updated_at"},
     "contract_versions": {
-        "id", "contract_id", "number", "source_key", "filename", "status", "created_at"
+        "id",
+        "contract_id",
+        "number",
+        "source_key",
+        "filename",
+        "status",
+        "created_at",
     },
     "contract_version_contents": {
-        "version_id", "document_text", "content_hash", "parser_name", "parser_version",
-        "page_count", "character_count", "created_at", "updated_at",
+        "version_id",
+        "document_text",
+        "content_hash",
+        "parser_name",
+        "parser_version",
+        "page_count",
+        "character_count",
+        "created_at",
+        "updated_at",
     },
     "contract_analysis_runs": {
-        "id", "version_id", "status", "document_text", "result", "error", "workflow_name",
-        "current_step", "attempt", "model_name", "prompt_version", "created_at", "started_at",
+        "id",
+        "version_id",
+        "status",
+        "document_text",
+        "result",
+        "error",
+        "workflow_name",
+        "current_step",
+        "attempt",
+        "model_name",
+        "prompt_version",
+        "created_at",
+        "started_at",
         "finished_at",
     },
     "contract_clauses": {
-        "id", "version_id", "run_id", "sequence", "clause_type", "title", "original_text",
-        "summary", "locator", "created_at",
+        "id",
+        "version_id",
+        "run_id",
+        "sequence",
+        "clause_type",
+        "title",
+        "original_text",
+        "summary",
+        "locator",
+        "created_at",
     },
     "contract_risks": {
-        "id", "version_id", "run_id", "clause_id", "title", "risk_level", "evidence_text",
-        "reason", "suggestion", "review_status", "reviewer_note", "created_at", "updated_at",
+        "id",
+        "version_id",
+        "run_id",
+        "clause_id",
+        "title",
+        "risk_level",
+        "evidence_text",
+        "reason",
+        "suggestion",
+        "review_status",
+        "reviewer_note",
+        "created_at",
+        "updated_at",
     },
     "contract_review_selections": {"version_id", "run_id", "selected_at"},
 }
 DOCUMENT_COLUMNS = {
-    "contract_document_blocks": {"id", "version_id", "sequence", "text", "type", "page", "created_at"},
-    "contract_document_clauses": {"id", "version_id", "sequence", "title", "clause_type", "original_text",
-                                  "source_block_ids", "pages", "intelligence_version", "created_at"},
-    "contract_document_facts": {"version_id", "parser_version", "intelligence_version", "content_hash",
-                                "extracted_metadata", "covered_blocks", "total_blocks", "coverage_ratio",
-                                "warnings", "created_at"},
+    "contract_document_blocks": {
+        "id",
+        "version_id",
+        "sequence",
+        "text",
+        "type",
+        "page",
+        "created_at",
+    },
+    "contract_document_clauses": {
+        "id",
+        "version_id",
+        "sequence",
+        "title",
+        "clause_type",
+        "original_text",
+        "source_block_ids",
+        "pages",
+        "intelligence_version",
+        "created_at",
+    },
+    "contract_document_facts": {
+        "version_id",
+        "parser_version",
+        "intelligence_version",
+        "content_hash",
+        "extracted_metadata",
+        "covered_blocks",
+        "total_blocks",
+        "coverage_ratio",
+        "warnings",
+        "created_at",
+    },
 }
 REQUIRED_COLUMNS.update(DOCUMENT_COLUMNS)
+V2_COLUMNS = {
+    "contract_analysis_runs": {
+        "review_version",
+        "our_party",
+        "party_role",
+        "contract_type",
+        "context_snapshot",
+    },
+    "contract_risks": {
+        "canonical_clause_id",
+        "risk_type",
+        "related_clause_ids",
+        "policy_ids",
+        "reference_citations",
+    },
+    "contract_document_blocks": {"join_previous"},
+}
+for table, columns in V2_COLUMNS.items():
+    REQUIRED_COLUMNS[table] = REQUIRED_COLUMNS[table] | columns
+POLICY_COLUMNS = {
+    "contract_policies": {
+        "id",
+        "user_id",
+        "name",
+        "description",
+        "category",
+        "applicable_contract_types",
+        "applicable_party_role",
+        "requirement",
+        "severity",
+        "enabled",
+        "archived",
+        "version",
+        "created_at",
+        "updated_at",
+    }
+}
+REQUIRED_COLUMNS.update(POLICY_COLUMNS)
+KNOWLEDGE_COLUMNS = {
+    "contract_knowledge_documents": {
+        "id",
+        "user_id",
+        "filename",
+        "source_key",
+        "content_hash",
+        "document_version",
+        "category",
+        "status",
+        "generation",
+        "attempt",
+        "chunk_count",
+        "byte_count",
+        "page_count",
+        "embedding_model",
+        "error",
+        "created_at",
+        "updated_at",
+    },
+    "contract_knowledge_chunks": {
+        "id",
+        "document_id",
+        "user_id",
+        "document_version",
+        "generation",
+        "sequence",
+        "chunk_text",
+        "locator",
+        "token_index",
+        "embedding",
+        "embedding_model",
+    },
+}
+REQUIRED_COLUMNS.update(KNOWLEDGE_COLUMNS)
 REQUIRED_FOREIGN_KEYS = {
     ("contract_customers", ("user_id",), "users", ("user_id",)),
     ("contracts", ("user_id",), "users", ("user_id",)),
@@ -110,11 +263,43 @@ def audit(conn: Connection, *, target: str = "head") -> dict[str, object]:
     table_names = set(insp.get_table_names())
     issues: list[str] = []
     warnings: list[str] = []
-    required_columns = {table: columns for table, columns in REQUIRED_COLUMNS.items()
-                        if target == "head" or table not in DOCUMENT_COLUMNS}
+    required_columns = {
+        table: columns
+        for table, columns in REQUIRED_COLUMNS.items()
+        if target == "head"
+        or table not in (DOCUMENT_COLUMNS | POLICY_COLUMNS | KNOWLEDGE_COLUMNS)
+    }
+    if target == "baseline":
+        required_columns = {
+            table: columns - V2_COLUMNS.get(table, set())
+            for table, columns in required_columns.items()
+        }
     required_fks = set(REQUIRED_FOREIGN_KEYS)
     if target == "head":
-        required_fks.update((table, ("version_id",), "contract_versions", ("id",)) for table in DOCUMENT_COLUMNS)
+        required_fks.add(("contract_policies", ("user_id",), "users", ("user_id",)))
+        required_fks.update(
+            (table, ("user_id",), "users", ("user_id",)) for table in KNOWLEDGE_COLUMNS
+        )
+        required_fks.add(
+            (
+                "contract_knowledge_chunks",
+                ("document_id",),
+                "contract_knowledge_documents",
+                ("id",),
+            )
+        )
+        required_fks.update(
+            (table, ("version_id",), "contract_versions", ("id",))
+            for table in DOCUMENT_COLUMNS
+        )
+        required_fks.add(
+            (
+                "contract_risks",
+                ("canonical_clause_id",),
+                "contract_document_clauses",
+                ("id",),
+            )
+        )
 
     for table, required in required_columns.items():
         if table not in table_names:
@@ -159,7 +344,9 @@ def audit(conn: Connection, *, target: str = "head") -> dict[str, object]:
         predicate = str(
             (active_index.get("dialect_options") or {}).get("postgresql_where") or ""
         ).lower()
-        if predicate and not all(status in predicate for status in ("pending", "parsing", "analyzing")):
+        if predicate and not all(
+            status in predicate for status in ("pending", "parsing", "analyzing")
+        ):
             issues.append("index uq_contract_active_analysis has unexpected predicate")
 
     if "contract_versions" in table_names:
@@ -184,9 +371,15 @@ def audit(conn: Connection, *, target: str = "head") -> dict[str, object]:
             ):
                 issues.append("missing legacy unique index: uq_contract_version_number")
         elif "uq_contract_versions_contract_number" in version_uniques:
-            issues.append("legacy unique constraint still present: uq_contract_versions_contract_number")
-        if ("contract_id", "number") not in _unique_column_sets(insp, "contract_versions"):
-            issues.append("missing unique constraint: contract_versions(contract_id, number)")
+            issues.append(
+                "legacy unique constraint still present: uq_contract_versions_contract_number"
+            )
+        if ("contract_id", "number") not in _unique_column_sets(
+            insp, "contract_versions"
+        ):
+            issues.append(
+                "missing unique constraint: contract_versions(contract_id, number)"
+            )
         duplicate_versions = _scalar_rows(
             conn,
             """
@@ -199,7 +392,9 @@ def audit(conn: Connection, *, target: str = "head") -> dict[str, object]:
             """,
         )
         if duplicate_versions:
-            issues.append(f"duplicate version numbers: {len(duplicate_versions)} group(s)")
+            issues.append(
+                f"duplicate version numbers: {len(duplicate_versions)} group(s)"
+            )
     else:
         duplicate_versions = []
 
@@ -217,50 +412,105 @@ def audit(conn: Connection, *, target: str = "head") -> dict[str, object]:
             """,
         )
         if duplicate_active_runs:
-            issues.append(f"multiple active runs: {len(duplicate_active_runs)} version(s)")
+            issues.append(
+                f"multiple active runs: {len(duplicate_active_runs)} version(s)"
+            )
     else:
         duplicate_active_runs = []
 
     if "contract_clauses" in table_names:
         if ("run_id", "sequence") not in _unique_column_sets(insp, "contract_clauses"):
-            issues.append("missing unique constraint: contract_clauses(run_id, sequence)")
+            issues.append(
+                "missing unique constraint: contract_clauses(run_id, sequence)"
+            )
 
     if "contract_review_selections" in table_names:
         if ("run_id",) not in _unique_column_sets(insp, "contract_review_selections"):
-            issues.append("missing unique constraint: contract_review_selections(run_id)")
+            issues.append(
+                "missing unique constraint: contract_review_selections(run_id)"
+            )
 
     for table in ("contract_document_blocks", "contract_document_clauses"):
         if target == "head" and table in table_names:
             if ("version_id", "sequence") not in _unique_column_sets(insp, table):
-                issues.append(f"missing unique constraint: {table}(version_id, sequence)")
+                issues.append(
+                    f"missing unique constraint: {table}(version_id, sequence)"
+                )
 
     invalid_grounding = []
     if target == "head" and not issues:
         from sqlalchemy import select
-        from products.contract.models import CanonicalContractClauseModel, ContractDocumentBlockModel
+        from products.contract.models import (
+            CanonicalContractClauseModel,
+            ContractDocumentBlockModel,
+        )
+        from products.contract.domain.document import DocumentBlock, join_block_text
+
         clauses = CanonicalContractClauseModel.__table__
         blocks = ContractDocumentBlockModel.__table__
         # Validate JSONB provenance against source rows without printing contract contents.
         for row in conn.execute(select(clauses)).mappings():
-            source = {str(b["id"]): b for b in conn.execute(select(blocks).where(
-                blocks.c.version_id == row["version_id"])).mappings()}
+            source = {
+                str(b["id"]): b
+                for b in conn.execute(
+                    select(blocks).where(blocks.c.version_id == row["version_id"])
+                ).mappings()
+            }
             ids = row["source_block_ids"]
-            if (not ids or len(ids) != len(set(ids)) or any(key not in source for key in ids)
-                    or [source[key]["sequence"] for key in ids] != sorted(source[key]["sequence"] for key in ids)
-                    or row["original_text"] != '\n\n'.join(source[key]["text"] for key in ids)):
+            if (
+                not ids
+                or len(ids) != len(set(ids))
+                or any(key not in source for key in ids)
+                or [source[key]["sequence"] for key in ids]
+                != sorted(source[key]["sequence"] for key in ids)
+                or row["original_text"]
+                != join_block_text(
+                    [
+                        DocumentBlock(
+                            source[key]["id"],
+                            source[key]["version_id"],
+                            source[key]["sequence"],
+                            source[key]["text"],
+                            source[key]["type"],
+                            source[key]["page"],
+                            source[key]["join_previous"],
+                        )
+                        for key in ids
+                    ]
+                )
+            ):
                 invalid_grounding.append(str(row["id"]))
         if invalid_grounding:
-            issues.append(f"invalid canonical source grounding: {len(invalid_grounding)} clause(s)")
+            issues.append(
+                f"invalid canonical source grounding: {len(invalid_grounding)} clause(s)"
+            )
+        invalid_risks = _scalar_rows(
+            conn,
+            """
+            SELECT r.id FROM contract_risks r
+            JOIN contract_analysis_runs a ON a.id = r.run_id
+            LEFT JOIN contract_document_clauses c ON c.id = r.canonical_clause_id
+            WHERE a.review_version = 'v2' AND
+              (c.id IS NULL OR c.version_id <> a.version_id OR r.version_id <> a.version_id
+               OR r.clause_id IS NOT NULL OR r.risk_type IS NULL)
+        """,
+        )
+        if invalid_risks:
+            issues.append(f"invalid V2 risk association: {len(invalid_risks)} risk(s)")
 
     stamped_revision: str | None = None
     if "alembic_version" in table_names:
-        stamped_revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one_or_none()
+        stamped_revision = conn.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one_or_none()
         if stamped_revision != expected_revision:
             warnings.append(
                 f"database revision is {stamped_revision!r}, expected {expected_revision!r}"
             )
     else:
-        warnings.append("alembic_version is absent; audit before stamping is expected to show this")
+        warnings.append(
+            "alembic_version is absent; audit before stamping is expected to show this"
+        )
 
     return {
         "ok": not issues,
@@ -300,7 +550,13 @@ def main() -> int:
         with engine.connect() as conn:
             report = audit(conn, target=args.target)
     except SQLAlchemyError as exc:
-        print(json.dumps({"ok": False, "connection_error": str(exc)}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {"ok": False, "connection_error": str(exc)},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 2
     finally:
         engine.dispose()

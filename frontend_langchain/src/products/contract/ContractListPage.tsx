@@ -57,7 +57,13 @@ export default function ContractListPage() {
       const created = await createContract({ title: values.title, customer_id: customer });
       if (!created.success || !created.data) throw new Error();
       id = created.data.id;
-      await uploadContract(id, file);
+      await uploadContract(
+        id,
+        file,
+        values.our_party || '',
+        values.party_role || '',
+        values.contract_type || '',
+      );
       navigate(`/contracts/${id}`);
     } catch (e) {
       message.error(errorText(e));
@@ -79,7 +85,11 @@ export default function ContractListPage() {
         <strong>
           DG <span>合同智能工作台</span>
         </strong>
-        <Button onClick={() => navigate('/home')}>返回首页</Button>
+        <div className="contract-actions">
+          <Button onClick={() => navigate('/contracts/policies')}>审查规则</Button>
+          <Button onClick={() => navigate('/contracts/knowledge')}>企业知识库</Button>
+          <Button onClick={() => navigate('/home')}>返回首页</Button>
+        </div>
       </header>
       <section className="contract-heading">
         <div>
@@ -166,6 +176,27 @@ export default function ContractListPage() {
                 ...customers.map((c) => ({ value: c.id, label: c.name })),
               ]}
             />
+          </Form.Item>
+          <Form.Item
+            name="our_party"
+            label="我方签约方"
+            extra="填写甲方、乙方或签约主体名称；留空按中立立场审查。"
+          >
+            <Input maxLength={255} placeholder="例如：甲方（采购方）" />
+          </Form.Item>
+          <Form.Item
+            name="party_role"
+            label="我方业务角色"
+            extra="与规则适用范围一致；如 buyer / supplier。"
+          >
+            <Input maxLength={64} />
+          </Form.Item>
+          <Form.Item
+            name="contract_type"
+            label="合同类型"
+            extra="与规则适用范围一致；如 procurement / technical_service。"
+          >
+            <Input maxLength={64} />
           </Form.Item>
           {(!customerId || customerId === 'new') && (
             <>

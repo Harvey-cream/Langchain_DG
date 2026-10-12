@@ -1,5 +1,7 @@
 # P3 执行总结
 
+本文记录 P3 时点的实现和历史验收。当前审查已升级到 Review V2，接口组织和最新验收状态见 [P4-review-v2.md](./P4-review-v2.md)；下文的 Review V1 兼容描述不代表当前新 Run 的输入输出。
+
 完成日期：2026-09-24。运行环境：现有 `.venv-py312`（Python 3.12.10）、本地 Docker PostgreSQL、真实 OSS。LLM 使用 mock/fake structured output，没有调用付费模型。
 
 P2 的 Router → Service → Store/OSS/Dispatcher → Handler → Workflow 边界保持；新增一个 `DocumentIntelligencePipeline`，Document Facts 与 Review V1 并存。

@@ -19,6 +19,18 @@ class DocumentBlock:
     text: str
     type: BlockType = "paragraph"
     page: int | None = None
+    join_previous: bool = False
+
+
+def join_block_text(blocks) -> str:
+    """Continuation slices of one source block join without an added separator."""
+    text = ''
+    previous = None
+    for block in blocks:
+        separator = '' if previous is None or (block.join_previous and block.sequence == previous.sequence + 1) else BLOCK_JOIN
+        text += separator + block.text
+        previous = block
+    return text
 
 
 @dataclass(frozen=True, slots=True)

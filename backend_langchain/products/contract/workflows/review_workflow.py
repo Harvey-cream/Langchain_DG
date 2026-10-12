@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from pydantic import ValidationError
 
 from products.contract import db as contract_db
 from products.contract.schemas.analysis import ContractAnalysis
+from products.contract.quality import ReviewQualityError
+from products.contract.agents.review import ReviewAgent
 
 if TYPE_CHECKING:
     from products.contract.document_intelligence.pipeline import (
@@ -17,10 +19,6 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
-
-
-class ContractReviewer(Protocol):
-    async def review(self, document_text: str) -> ContractAnalysis: ...
 
 
 def _compact(value: str) -> str:
@@ -36,8 +34,7 @@ def validate_evidence(document_text: str, result: ContractAnalysis) -> bool:
         return False
     clause_count = len(result.clauses)
     return all(
-        risk.clause_sequence is None
-        or 1 <= risk.clause_sequence <= clause_count
+        risk.clause_sequence is None or 1 <= risk.clause_sequence <= clause_count
         for risk in result.risks
     )
 
@@ -64,14 +61,14 @@ def review_error_message(exc: Exception) -> str:
 async def run_contract_review(
     session,
     document_intelligence: DocumentIntelligencePipeline,
-    reviewer: ContractReviewer,
+    reviewer: ReviewAgent,
     run_id: UUID,
     *,
     timeout_seconds: int = 240,
 ) -> None:
-    """Run one claimed analysis task; database transactions stay short."""
+    """Task lifecycle only: claim, facts, frozen policy, Graph, atomic publication."""
+    output = None
     try:
-        # T1: 原子领取任务并立即提交，重复执行者会直接返回。
         async with session.begin():
             context = await contract_db.claim_run(session, run_id)
             if context is None:
@@ -82,23 +79,57 @@ async def run_contract_review(
             document_intelligence.ensure(context),
             timeout=timeout_seconds,
         )
-
-        # T3: 状态提交后再调用 LLM，长 IO 不占用数据库事务。
         async with session.begin():
+            snapshot = (
+                await contract_db.prepare_review_context(session, context)
+                if context.user_id is not None
+                else {}
+            )
             await contract_db.mark_analyzing(session, context)
 
-        result = await asyncio.wait_for(
-            review_document(facts.document.document_text, reviewer.review),
-            timeout=timeout_seconds,
+        # No database transaction spans retrieval, tools or model calls.
+        output = await reviewer.review(
+            facts.clauses,
+            metadata=facts.metadata,
+            our_party=context.our_party,
+            policies=snapshot.get("policies", []),
+            user_id=context.user_id,
+            version_id=context.version_id,
+            party_role=context.party_role,
+            contract_type=context.contract_type,
+            timeout_seconds=timeout_seconds,
         )
 
-        # T4: Clause、Risk、结果和选中记录一次性提交。
+        # Freeze ONLY sources actually shown to the model. Snapshot + final
+        # authoritative gate + findings + completed commit or roll back together.
         async with session.begin():
-            await contract_db.complete_run(session, context, result)
+            for reference in output.used_references:
+                await contract_db.record_review_references(
+                    session,
+                    context,
+                    [reference],
+                    reference["clause_ids"],
+                )
+            await contract_db.complete_run(
+                session,
+                context,
+                output.publication_result,
+                review_trace=output.review_trace,
+                retrieval_events=output.retrieval_events,
+            )
     except Exception as exc:
         logger.exception("contract review workflow failed run_id=%s", run_id)
-        in_transaction = getattr(session, "in_transaction", None)
-        if callable(in_transaction) and in_transaction():
+        if session.in_transaction():
             await session.rollback()
         async with session.begin():
-            await contract_db.fail_run(session, run_id, review_error_message(exc))
+            await contract_db.fail_run(
+                session,
+                run_id,
+                review_error_message(exc),
+                review_trace=(
+                    output.review_trace
+                    if output
+                    else getattr(exc, "review_trace", None)
+                ),
+                quality_error=exc if isinstance(exc, ReviewQualityError) else None,
+            )

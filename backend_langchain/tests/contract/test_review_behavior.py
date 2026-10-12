@@ -1,4 +1,5 @@
 from __future__ import annotations
+from products.contract.agents.review import ReviewGraphResult
 
 import asyncio
 import unittest
@@ -17,7 +18,7 @@ from products.contract.schemas import (
     ContractVersionCreate,
     CustomerCreate,
 )
-from products.contract.schemas.analysis import ContractAnalysis
+from products.contract.schemas.analysis import ReviewResult
 from products.contract.workflows.review_workflow import run_contract_review
 
 
@@ -112,7 +113,9 @@ class ContractRouterBehaviorTests(unittest.IsolatedAsyncioTestCase):
         background = BackgroundTasks()
         file = _UploadFile(filename="folder/contract.pdf")
         storage = SimpleNamespace(
-            put=MagicMock(side_effect=lambda *_args, **_kwargs: events.append("oss.put")),
+            put=MagicMock(
+                side_effect=lambda *_args, **_kwargs: events.append("oss.put")
+            ),
             delete=MagicMock(side_effect=lambda *_args: events.append("oss.delete")),
         )
 
@@ -138,7 +141,9 @@ class ContractRouterBehaviorTests(unittest.IsolatedAsyncioTestCase):
                 "tx.begin",
                 "db.scalar",
                 "db.scalar",
-                "db.add_all",
+                "db.add",
+                "db.flush",
+                "db.add",
                 "db.flush",
                 "tx.commit",
             ],
@@ -312,14 +317,14 @@ class WorkflowClaimBehaviorTests(unittest.IsolatedAsyncioTestCase):
         completed = AsyncMock()
         failed = AsyncMock()
         reviewer = SimpleNamespace(
-            review=AsyncMock(
-                return_value=ContractAnalysis(document_type="合同", summary="摘要")
-            )
+            review=AsyncMock(return_value=ReviewGraphResult(ReviewResult(risks=[])))
         )
         pipeline = SimpleNamespace(
             ensure=AsyncMock(
                 return_value=SimpleNamespace(
-                    document=SimpleNamespace(document_text="真实合同条款")
+                    document=SimpleNamespace(document_text="真实合同条款"),
+                    clauses=(),
+                    metadata={},
                 )
             )
         )
@@ -371,9 +376,7 @@ class HistoryAndIsolationBehaviorTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             contract_db, "_get_owned_version", AsyncMock(return_value=object())
         ):
-            history = await contract_db.list_history(
-                session, 7, uuid4(), version_id
-            )
+            history = await contract_db.list_history(session, 7, uuid4(), version_id)
 
         self.assertEqual([item.attempt for item in history], [2, 1])
 
@@ -405,9 +408,7 @@ class HistoryAndIsolationBehaviorTests(unittest.IsolatedAsyncioTestCase):
                 await contract_db.list_history(session, 8, uuid4(), uuid4())
             )
             self.assertFalse(
-                await contract_db.select_run(
-                    session, 8, uuid4(), uuid4(), uuid4()
-                )
+                await contract_db.select_run(session, 8, uuid4(), uuid4(), uuid4())
             )
 
         session.execute.assert_not_awaited()

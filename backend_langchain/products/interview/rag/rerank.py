@@ -1,4 +1,5 @@
 """精排：DashScope qwen3-rerank API，返回 top_k 文档。"""
+
 from __future__ import annotations
 
 import logging
@@ -11,7 +12,6 @@ from common.config.config import RERANK_TOP_K, dashscope_api_key, dashscope_rera
 
 logger = logging.getLogger(__name__)
 
-_RERANK_URL = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
 _DOC_PREVIEW_CHARS = 1200
 
 
@@ -37,37 +37,9 @@ def _fallback_by_distance(
 
 
 def _dashscope_rerank(query: str, documents: list[str], *, top_n: int) -> list[int]:
-    import httpx
+    from common.integrations.retrieval_models import rerank_indices
 
-    api_key = dashscope_api_key()
-    if not api_key:
-        raise RuntimeError("未配置 DASHSCOPE_API_KEY")
-
-    model = dashscope_rerank_model()
-    payload: dict = {
-        "model": model,
-        "input": {"query": query, "documents": documents},
-        "parameters": {"top_n": top_n, "return_documents": False},
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    with httpx.Client(timeout=60.0) as client:
-        resp = client.post(_RERANK_URL, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-
-    output = data.get("output") or {}
-    results = output.get("results") or []
-    indices: list[int] = []
-    for row in results:
-        if not isinstance(row, dict):
-            continue
-        idx = row.get("index")
-        if isinstance(idx, int) and 0 <= idx < len(documents):
-            indices.append(idx)
-    return indices
+    return rerank_indices(query, documents, top_n=top_n, timeout=60)
 
 
 def rerank_documents(

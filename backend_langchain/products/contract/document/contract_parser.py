@@ -4,7 +4,7 @@ from io import BytesIO
 from uuid import UUID, NAMESPACE_URL, uuid5
 from zipfile import ZipFile, BadZipFile
 
-from products.contract.domain.document import DocumentBlock, ParsedDocument, PARSER_VERSION
+from products.contract.domain.document import DocumentBlock, ParsedDocument, PARSER_VERSION, join_block_text
 
 MAX_BYTES = 20 * 1024 * 1024
 MAX_CHARS = 80000
@@ -43,7 +43,7 @@ def parse_contract(filename: str, data: bytes, *, version_id: UUID | None = None
                 piece = value[start:start + MAX_BLOCK_CHARS]
                 sequence = len(blocks) + 1
                 block_id = uuid5(version_id, f"{PARSER_VERSION}:{sequence}:{page}:{block_type}:{piece}")
-                blocks.append(DocumentBlock(block_id, version_id, sequence, piece, block_type, page))
+                blocks.append(DocumentBlock(block_id, version_id, sequence, piece, block_type, page, start > 0))
 
     if kind == 'pdf':
         import pdfplumber
@@ -88,7 +88,7 @@ def parse_contract(filename: str, data: bytes, *, version_id: UUID | None = None
         except (BadZipFile, KeyError, ValueError, XMLSyntaxError) as exc:
             raise ValueError('无法解析 DOCX 文件') from exc
         page_count = None  # DOCX has no trustworthy pagination without a layout engine.
-        text = '\n\n'.join(f'[段落 {b.sequence}] {b.text}' for b in blocks)
+        text = join_block_text(blocks)
     if not text.strip():
         raise ValueError('文档没有可分析的文字')
     if len(text) > MAX_CHARS:

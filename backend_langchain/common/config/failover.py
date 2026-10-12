@@ -8,6 +8,7 @@
 约定：任一模型抛异常只跳过它；全部失败才抛出**最后一个**异常，且
 **保留原异常类型**（上层可能按 SDK 异常类型分流）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,6 +33,7 @@ class _FailoverRunnable:
             raise ValueError("fallback chain is empty")
         self._runnables = list(runnables)
         self._labels = list(labels)
+        self.last_successful_model: str | None = None
 
     def _warn(self, index: int, exc: BaseException) -> None:
         logger.warning(
@@ -54,13 +56,20 @@ class _FailoverRunnable:
         assert last is not None
         raise last
 
-    async def ainvoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> Any:
+    async def ainvoke(
+        self, input: Any, config: Optional[Any] = None, **kwargs: Any
+    ) -> Any:
+        self.last_successful_model = None
         last: BaseException | None = None
         for index, runnable in enumerate(self._runnables):
             try:
-                if config is None:
-                    return await runnable.ainvoke(input, **kwargs)
-                return await runnable.ainvoke(input, config, **kwargs)
+                result = (
+                    await runnable.ainvoke(input, **kwargs)
+                    if config is None
+                    else await runnable.ainvoke(input, config, **kwargs)
+                )
+                self.last_successful_model = self._labels[index]
+                return result
             except Exception as exc:  # noqa: BLE001
                 last = exc
                 self._warn(index, exc)
@@ -106,7 +115,9 @@ class FailoverLLM:
         if not models:
             raise ValueError("FailoverLLM requires at least one model")
         self._models = list(models)
-        self._labels = list(labels) if labels is not None else [_label(m) for m in models]
+        self._labels = (
+            list(labels) if labels is not None else [_label(m) for m in models]
+        )
         self._runner = _FailoverRunnable(self._models, self._labels)
 
     @property
@@ -120,7 +131,9 @@ class FailoverLLM:
     def invoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> Any:
         return self._runner.invoke(input, config, **kwargs)
 
-    async def ainvoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> Any:
+    async def ainvoke(
+        self, input: Any, config: Optional[Any] = None, **kwargs: Any
+    ) -> Any:
         return await self._runner.ainvoke(input, config, **kwargs)
 
     def astream(
@@ -134,5 +147,7 @@ class FailoverLLM:
 
     def with_structured_output(self, schema: Any, **kwargs: Any) -> _FailoverRunnable:
         # kwargs（含 method=... / strict=... 等）原样透传给每个模型
-        structured = [model.with_structured_output(schema, **kwargs) for model in self._models]
+        structured = [
+            model.with_structured_output(schema, **kwargs) for model in self._models
+        ]
         return _FailoverRunnable(structured, self._labels)

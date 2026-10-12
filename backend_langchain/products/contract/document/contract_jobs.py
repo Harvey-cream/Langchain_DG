@@ -4,10 +4,15 @@ from uuid import UUID
 
 from common.database import SessionLocal
 from products.contract.document.contract_source import OssContractDocumentParser
-from products.contract.document.contract_intelligence import LangChainDocumentIntelligence
-from products.contract.document_intelligence.pipeline import DocumentIntelligencePipeline
-from products.contract.agents.review_agent import LangChainContractReviewer
+from products.contract.document.contract_intelligence import (
+    LangChainDocumentIntelligence,
+)
+from products.contract.document_intelligence.pipeline import (
+    DocumentIntelligencePipeline,
+)
+from products.contract.agents.review import ReviewAgent
 from products.contract.workflows.review_workflow import run_contract_review
+
 
 async def execute_analysis(run_id: UUID) -> None:
     async with SessionLocal() as db:
@@ -16,4 +21,9 @@ async def execute_analysis(run_id: UUID) -> None:
             OssContractDocumentParser(),
             LangChainDocumentIntelligence(),
         )
-        await run_contract_review(db, pipeline, LangChainContractReviewer(), run_id)
+        await run_contract_review(
+            db,
+            pipeline,
+            ReviewAgent(retrieval_factory=SessionLocal),
+            run_id,
+        )

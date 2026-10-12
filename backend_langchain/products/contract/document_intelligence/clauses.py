@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from uuid import UUID, uuid5
 
 from products.contract.domain.document import (
-    BLOCK_JOIN, INTELLIGENCE_VERSION, CanonicalContractClause, DocumentBlock,
+    join_block_text, INTELLIGENCE_VERSION, CanonicalContractClause, DocumentBlock,
 )
 from products.contract.schemas.document import ClauseCandidate, ClauseExtraction
 
@@ -47,7 +47,7 @@ def ground_candidates(
             id=uuid5(version_id, f"{INTELLIGENCE_VERSION}:{sequence}:" + ','.join(map(str, ids))),
             version_id=version_id, sequence=sequence, title=candidate.title,
             clause_type=candidate.clause_type,
-            original_text=BLOCK_JOIN.join(b.text for b in resolved),
+            original_text=join_block_text(resolved),
             source_block_ids=ids,
             pages=tuple(sorted({b.page for b in resolved if b.page is not None})),
         ))

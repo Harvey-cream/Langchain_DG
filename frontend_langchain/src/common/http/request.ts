@@ -115,3 +115,9 @@ export const sendUploadRequest = async <T = AxiosResponse['data']>(
   const response = await apiClient.request<T>(config);
   return response.data;
 };
+
+// Keep authenticated downloads on the same token-expiry handling path.
+export const sendDownloadRequest = async (url: string): Promise<Blob> => {
+  const response = await apiClient.get<Blob>(url, { responseType: 'blob', timeout: 120000 });
+  return response.data;
+};

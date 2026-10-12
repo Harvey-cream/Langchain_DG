@@ -11,7 +11,6 @@ from products.interview.conversations import apply_hf_mirror_default
 from common.config.config import (
     DEFAULT_HF_MODEL,
     HF_EMBEDDING_BATCH_SIZE,
-    DASHSCOPE_EMBEDDING_BASE_URL,
     dashscope_api_key,
     dashscope_dimensions,
     dashscope_embedding_batch_size,
@@ -39,19 +38,14 @@ def _dashscope_cache_key() -> str:
     return f"dashscope:{dashscope_model_name()}:{dashscope_dimensions()}"
 
 
-def _dashscope_openai_compatible_embeddings(api_key: str, model: str, *, dimensions: int) -> Embeddings:
-    from langchain_openai import OpenAIEmbeddings
+def _dashscope_openai_compatible_embeddings(
+    api_key: str, model: str, *, dimensions: int
+) -> Embeddings:
+    from common.integrations.retrieval_models import make_dashscope_embeddings
 
-    kwargs: dict = {
-        "model": model,
-        "api_key": api_key,
-        "base_url": DASHSCOPE_EMBEDDING_BASE_URL,
-        "check_embedding_ctx_length": False,
-        "chunk_size": dashscope_embedding_batch_size(),
-    }
-    if model in ("text-embedding-v3", "text-embedding-v4"):
-        kwargs["dimensions"] = dimensions
-    return OpenAIEmbeddings(**kwargs)
+    return make_dashscope_embeddings(
+        api_key=api_key, model=model, dimensions=dimensions
+    )
 
 
 def get_rag_embedding_model() -> Embeddings:

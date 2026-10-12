@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from uuid import UUID
 
 from products.contract.domain.document import (
-    BLOCK_JOIN, CanonicalContractClause, CoverageReport, DocumentBlock,
+    join_block_text, CanonicalContractClause, CoverageReport, DocumentBlock,
 )
 
 
@@ -35,7 +35,7 @@ def validate_clauses(
         if positions != sorted(positions) or positions[0] < previous_start:
             raise ValueError("Clause Block 顺序异常")
         previous_start = positions[0]
-        if clause.original_text != BLOCK_JOIN.join(b.text for b in resolved):
+        if clause.original_text != join_block_text(resolved):
             raise ValueError("Clause original_text 与来源 Block 不完全一致")
         if clause.pages != tuple(sorted({b.page for b in resolved if b.page is not None})):
             raise ValueError("Clause 页码与来源 Block 不一致")

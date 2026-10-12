@@ -12,13 +12,15 @@ LangChain DG 是一个**企业合同全生命周期 AI Agent 平台**。系统�
 
 平台采用 **Workflow First、Agent Second** 的设计思想，将确定性业务逻辑与 LLM 推理节点解耦：以 **LangGraph** 负责 Agent Workflow 与可恢复执行，以 **PostgreSQL** 保存业务状态，以 **RAG / ContractPolicy / MCP / OSS** 等共享能力构建面向真实业务流程的 Agent Application。
 
+> 当前 Contract 已实现至 **P4 + Review Graph 架构优化**：上传 → Version Facts / Canonical Clause → Policy + 私有 RAG → LangGraph Review（有界只读 Tool Calling）→ Quality Gate → 风险来源展示。确定性任务/事务仍由 Python Workflow 负责；Contract Review Graph 不启用 checkpoint 或 interrupt/resume。后文涉及 Revision、人工批准、Diff、谈判和交付的完整生命周期描述属于目标规划，不是已交付功能。
+
 > 本仓库此前的“多 Agent 对话应用 / 企业知识库问答”定位已经演进。**Contract 是当前第一产品线**；企业知识库（Knowledge）产品已退休，其可复用的 retrieval / embedding / pgvector 能力继续作为底层能力服务新产品。Interview Agent 作为独立产品线保留，但不再是项目主线。
 
 ## 核心能力
 
 ### 合同领域与版本模型
 
-- **Customer / Contract / ContractVersion** 领域实体与用例服务
+- **Customer / Contract / ContractVersion** 领域模型与直接接口编排
 - **append-only 版本模型**：`Contract ID` 稳定，`V1 / V2 / V3` 为完整快照，历史版本不覆盖
 - **合同归属与用户隔离**：所有查询按 `user_id` 隔离
 - **版本编号与历史追踪**：版本号单调递增，`(contract_id, number)` 唯一
@@ -341,13 +343,23 @@ npm run dev
 - [x] 共享基础设施（RAG / Memory / MCP / OSS / Redis / Docker）
 - [x] Contract 文件上传 + OSS 绑定
 - [x] Document Intelligence → Canonical ContractClause
-- [x] Review Workflow V1 → Clause / Risk
+- [x] P3 Version 级 Document Facts / Canonical Clause
+- [x] Review Workflow V2 → RiskFinding，关联真实 Canonical Clause；保留 V1 历史查询
+- [x] 我方身份输入、版本事实展示、风险关联条款原文查看
+- [x] P4.6 私有企业审查规则：CRUD、适用范围、版本与 Run 快照
+- [x] P4.7 私有 PDF/DOCX 知识库：OSS 入库、重建索引、条款组 Hybrid RAG
+- [x] pgvector + 真实 BM25 + RRF + 模型 Rerank，来源隔离及历史引用快照
+- [x] P4.8 确定性 Review Quality Gate：证据/规则/引用校验、保守去重、跨条款上下文与审查追溯
+- [x] P4 Review Graph：固定基础 RAG + 真实模型 Tool Calling，来源快照与报告原子发布；[架构与本轮验收报告](./backend_langchain/common/docs/P4-review-graph.md)
+
 - [ ] Revision + Human-in-the-loop
 - [ ] Version Diff
 - [ ] Negotiation Agent
 - [ ] DOCX / PDF 导出
 - [ ] Email 交付
 - [ ] 持久化后台任务（Queue / Worker 落地）
+
+P4 第一批（P4.1–P4.5）见 [Review V2 / RiskFinding](./backend_langchain/common/docs/P4-review-v2.md)；第二批（P4.6–P4.7）见 [企业规则与私有知识库 RAG](./backend_langchain/common/docs/P4-policy-rag.md)；第三批（P4.8）完整实现、规则和验收见 [Quality Gate / 全链路回归](./backend_langchain/common/docs/P4-quality-gate.md)。当前迁移 head 为 `0008_contract_knowledge`，部署前执行 `alembic upgrade head`。真实 PostgreSQL、OSS、Embedding、Rerank、Document Intelligence 和 Review 样例链路已验证；来源校验和少量真实模型 smoke 不等同于全面法律质量评估。Revision、人工批准及后续能力仍属于路线图，尚未实现。
 
 ---
 

@@ -1,4 +1,4 @@
-import { Alert, Button, Empty, Select, Spin, Tag, Upload } from 'antd';
+import { Alert, Button, Empty, Input, Select, Spin, Tag, Upload } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AnalysisHistory } from './components/AnalysisHistory';
 import { AnalysisResult } from './components/AnalysisResult';
@@ -22,6 +22,12 @@ export default function ContractVersionPage() {
     currentVersionId: selected,
     setCurrentVersionId: setSelected,
     analysis,
+    ourParty,
+    setOurParty,
+    partyRole,
+    setPartyRole,
+    contractType,
+    setContractType,
     selectedRunId,
     runs,
     loading,
@@ -67,6 +73,43 @@ export default function ContractVersionPage() {
           </Upload>
         </div>
       </section>
+      <div className="review-stance">
+        <label htmlFor="our-party">我方签约方</label>
+        <Input
+          id="our-party"
+          list="contract-parties"
+          value={ourParty}
+          maxLength={255}
+          onChange={(event) => setOurParty(event.target.value)}
+          disabled={busy || running}
+          placeholder="甲方、乙方或签约主体名称"
+        />
+        <datalist id="contract-parties">
+          {analysis?.facts?.metadata.parties.map((party) => (
+            <option key={party} value={party} />
+          ))}
+        </datalist>
+        <p>下次审查使用此身份；留空按中立立场审查。</p>
+        <label htmlFor="party-role">我方业务角色</label>
+        <Input
+          id="party-role"
+          value={partyRole}
+          maxLength={64}
+          disabled={busy || running}
+          onChange={(event) => setPartyRole(event.target.value)}
+          placeholder="如 buyer / supplier（与规则范围一致）"
+        />
+        <label htmlFor="contract-type">合同类型</label>
+        <Input
+          id="contract-type"
+          value={contractType}
+          maxLength={64}
+          disabled={busy || running}
+          onChange={(event) => setContractType(event.target.value)}
+          placeholder="如 procurement / technical_service"
+        />
+        <p>留空只使用不限制该范围的通用企业规则，不自动推断角色或合同类型。</p>
+      </div>
       {error && (
         <Alert
           type="error"
@@ -146,9 +189,9 @@ export default function ContractVersionPage() {
               开始分析
             </Button>
           )}
-          {analysis?.result && (
+          {analysis && (analysis.result || analysis.facts) && (
             <>
-              <AnalysisResult result={analysis.result} clauses={analysis.clauses} />
+              <AnalysisResult analysis={analysis} />
               <Button onClick={retry} disabled={running} loading={busy}>
                 重新分析
               </Button>

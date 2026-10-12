@@ -33,7 +33,7 @@ export function AnalysisHistory({
               : run.status === 'failed'
                 ? '分析失败'
                 : '进行中'
-          }${run.selected ? ' · 当前展示' : ''}`,
+          }${run.review_version ? ` · ${run.review_version.toUpperCase()}` : ''}${run.selected ? ' · 当前展示' : ''}`,
         }))}
       />
     </div>

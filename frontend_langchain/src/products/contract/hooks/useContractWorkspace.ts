@@ -23,6 +23,9 @@ export function useContractWorkspace(contractId: string) {
   const [runs, setRuns] = useState<AnalysisRun[]>([]);
   const [pageError, setPageError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [ourParty, setOurParty] = useState('');
+  const [partyRole, setPartyRole] = useState('');
+  const [contractType, setContractType] = useState('');
   const {
     analysis,
     loading,
@@ -34,6 +37,11 @@ export function useContractWorkspace(contractId: string) {
     [versions, currentVersionId],
   );
   const running = Boolean(analysis && ACTIVE_STATUSES.includes(analysis.status));
+  useEffect(() => {
+    setOurParty(analysis?.our_party ?? '');
+    setPartyRole(analysis?.party_role ?? '');
+    setContractType(analysis?.contract_type ?? '');
+  }, [currentVersionId, analysis?.our_party, analysis?.party_role, analysis?.contract_type]);
 
   useEffect(() => {
     let disposed = false;
@@ -80,7 +88,7 @@ export function useContractWorkspace(contractId: string) {
     }
     setBusy(true);
     try {
-      const response = await uploadContract(contractId, file);
+      const response = await uploadContract(contractId, file, ourParty, partyRole, contractType);
       if (!response.success || !response.data) {
         throw new Error(response.msg || '合同上传失败');
       }
@@ -100,7 +108,7 @@ export function useContractWorkspace(contractId: string) {
     if (!currentVersionId) return;
     setBusy(true);
     try {
-      await retryAnalysis(contractId, currentVersionId);
+      await retryAnalysis(contractId, currentVersionId, ourParty, partyRole, contractType);
       setRefreshKey((key) => key + 1);
     } catch (cause) {
       message.error(errorText(cause));
@@ -130,6 +138,12 @@ export function useContractWorkspace(contractId: string) {
     currentVersionId,
     setCurrentVersionId,
     analysis,
+    ourParty,
+    setOurParty,
+    partyRole,
+    setPartyRole,
+    contractType,
+    setContractType,
     selectedRunId: analysis?.selected_run_id ?? undefined,
     runs,
     loading,

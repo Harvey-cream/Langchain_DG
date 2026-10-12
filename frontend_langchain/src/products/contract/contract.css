@@ -259,6 +259,44 @@ body:has(.contract-shell) {
   color: #8591a3;
   font-size: 12px;
 }
+.review-stance {
+  max-width: 560px;
+  margin-bottom: 24px;
+}
+
+.policy-panel {
+  margin-bottom: 20px;
+}
+.policy-panel h2,
+.risk-reference p,
+.risk-policy p {
+  overflow-wrap: anywhere;
+}
+.risk-reference,
+.risk-policy {
+  border-left: 3px solid #c9d8ef;
+  padding-left: 12px;
+  margin: 16px 0;
+}
+.review-stance label {
+  display: block;
+  margin-bottom: 8px;
+}
+.review-stance p {
+  font-size: 13px;
+  color: #68758b;
+}
+.clause-source {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+}
+.clause-card > div {
+  min-width: 0;
+}
+.risk-card {
+  overflow-wrap: anywhere;
+}
 @media (max-width: 900px) {
   .contract-columns {
     grid-template-columns: 1fr;

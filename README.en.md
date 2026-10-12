@@ -12,13 +12,15 @@ LangChain DG is an **Enterprise Contract Lifecycle AI Agent Platform**. It is bu
 
 The platform follows a **Workflow First, Agent Second** philosophy that decouples deterministic business logic from LLM reasoning nodes. **LangGraph** drives agent workflows and resumable execution, **PostgreSQL** holds business state, and shared capabilities such as **RAG / ContractPolicy / MCP / OSS** form the foundation of an Agent Application built for real business processes.
 
+> Contract is currently implemented through **P4 + Review Graph refactoring**: upload → Version Facts / Canonical Clauses → Policies + private RAG → LangGraph Review with bounded read-only tool calling → Quality Gate → source-linked risk display. Deterministic task and transaction management remains in a Python workflow; Contract Review does not enable checkpoints or interrupt/resume. Revision, human approval, diff, negotiation and delivery remain target architecture, not delivered features.
+
 > The repository's earlier positioning — a "multi-agent chat app / enterprise knowledge-base Q&A" — has evolved. **Contract is the primary product line.** The enterprise Knowledge product has been retired; its reusable retrieval / embedding / pgvector capabilities remain as shared infrastructure. The Interview Agent is kept as an independent product line, but it is no longer the project's focus.
 
 ## Features
 
 ### Contract Domain & Versioning
 
-- **Customer / Contract / ContractVersion** domain entities and application services
+- **Customer / Contract / ContractVersion** domain models and direct API orchestration
 - **Append-only version model**: the `Contract ID` is stable while `V1 / V2 / V3` are full snapshots; history is never overwritten
 - **Contract ownership and user isolation**: every query is scoped by `user_id`
 - **Version numbering and history tracking**: monotonic version numbers with a unique `(contract_id, number)` constraint
@@ -341,13 +343,23 @@ npm run dev
 - [x] Shared infrastructure (RAG / Memory / MCP / OSS / Redis / Docker)
 - [x] Contract file upload + OSS binding
 - [x] Document Intelligence → canonical ContractClause
-- [x] Review Workflow V1 → Clause / Risk
+- [x] P3 version-owned Document Facts / Canonical Clauses
+- [x] Review Workflow V2 → RiskFindings grounded in Canonical Clauses, with V1 history preserved
+- [x] Reviewing-party input, version facts, and linked clause source views
+- [x] P4.6 Private enterprise policies: CRUD, applicability, versions and per-Run snapshots
+- [x] P4.7 Private PDF/DOCX knowledge: OSS ingestion, reindexing and clause-group hybrid RAG
+- [x] pgvector + real BM25 + RRF + model rerank, owner isolation and historical citation snapshots
+- [x] P4.8 Deterministic Review Quality Gate: evidence/policy/citation checks, conservative deduplication, cross-clause context and review traceability
+- [x] P4 Review Graph: mandatory baseline RAG, genuine model tool calls, atomic source snapshots and report publication; [architecture and verification report (Chinese)](./backend_langchain/common/docs/P4-review-graph.md)
+
 - [ ] Revision + human-in-the-loop
 - [ ] Version diff
 - [ ] Negotiation Agent
 - [ ] DOCX / PDF export
 - [ ] Email delivery
 - [ ] Durable background jobs (Queue / Worker rollout)
+
+P4.1–P4.5 are documented in [Review V2 / RiskFinding](./backend_langchain/common/docs/P4-review-v2.md); P4.6–P4.7 in [Enterprise Policies and Private Knowledge RAG](./backend_langchain/common/docs/P4-policy-rag.md); and P4.8 implementation, rules and verification in [Quality Gate / End-to-End Regression](./backend_langchain/common/docs/P4-quality-gate.md). The current migration head is `0008_contract_knowledge`; run `alembic upgrade head` before deployment. Real PostgreSQL, OSS, Embedding, Rerank, Document Intelligence and Review sample chains passed. Source verification and limited live-model smoke tests are not a comprehensive legal-quality evaluation. Revision, human approval and later capabilities remain roadmap items, not implemented features.
 
 ---
 

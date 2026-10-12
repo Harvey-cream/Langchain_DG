@@ -6,7 +6,9 @@ from typing import Any
 from uuid import UUID
 import hashlib
 
-from products.contract.domain.document import ParsedDocument
+from products.contract.domain.document import ParsedDocument, DocumentFacts
+
+REVIEW_PROMPT_VERSION = "review-v2-graph-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +17,10 @@ class ReviewContext:
     version_id: UUID
     source_key: str
     filename: str
+    our_party: str = ""
+    user_id: int | None = None
+    party_role: str = ""
+    contract_type: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +37,9 @@ class VersionContent:
         return cls(
             version_id=document.version_id,
             document_text=document.document_text,
-            content_hash=hashlib.sha256(document.document_text.encode("utf-8")).hexdigest(),
+            content_hash=hashlib.sha256(
+                document.document_text.encode("utf-8")
+            ).hexdigest(),
             parser_name=document.parser_name,
             parser_version=document.parser_version,
             page_count=document.page_count,
@@ -56,6 +64,11 @@ class ReviewRunRecord:
     created_at: datetime | None
     started_at: datetime | None
     finished_at: datetime | None
+    review_version: str = "v1"
+    our_party: str = ""
+    party_role: str = ""
+    contract_type: str = ""
+    context_snapshot: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +93,10 @@ class RiskRecord:
     suggestion: str
     review_status: str
     reviewer_note: str | None = None
+    risk_type: str | None = None
+    related_clause_ids: tuple[UUID, ...] = ()
+    policy_ids: tuple[UUID, ...] = ()
+    reference_citations: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,3 +106,4 @@ class ReviewSnapshot:
     document_text: str = ""
     clauses: list[ClauseRecord] = field(default_factory=list)
     risks: list[RiskRecord] = field(default_factory=list)
+    facts: DocumentFacts | None = None

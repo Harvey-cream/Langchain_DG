@@ -80,3 +80,13 @@ def test_long_paragraph_is_losslessly_split_for_bounded_llm_windows():
     assert len(parsed.blocks) > 1
     assert ''.join(b.text for b in parsed.blocks) == value
     assert len(block_windows(parsed.blocks)) > 1
+    from products.contract.document_intelligence.clauses import ground_candidates
+    from products.contract.document_intelligence.validation import validate_clauses
+    from products.contract.schemas.document import ClauseCandidate
+    clause = ground_candidates(parsed.version_id, parsed.blocks,
+        [ClauseCandidate(title='长段落', source_block_ids=[b.block_id for b in parsed.blocks])])[0]
+    assert clause.original_text == value
+    assert parsed.document_text == value
+    assert not parsed.blocks[0].join_previous
+    assert all(b.join_previous for b in parsed.blocks[1:])
+    validate_clauses(parsed.version_id, parsed.blocks, [clause])
